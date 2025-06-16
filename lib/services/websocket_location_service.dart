@@ -26,7 +26,12 @@ class WebSocketLocationService extends ChangeNotifier {
   Function(String error)? onError;
   Function(String message)? onLocationSharingEnded;
   Function(Map<String, dynamic> data)? onTrackingStarted;
-  Function(Map<String, dynamic> data)? onTrackingstopped;
+  Function(Map<String, dynamic> data)? onTrackingStopped;
+  
+  // NEW: Enhanced callbacks for order events
+  Function(Map<String, dynamic> data)? onOrderDelivered;
+  Function(Map<String, dynamic> data)? onLocationSharingStarted;
+  Function(Map<String, dynamic> data)? onLocationSharingStatusChanged;
   
   // Auto-reconnect timer
   Timer? _reconnectTimer;
@@ -42,6 +47,10 @@ class WebSocketLocationService extends ChangeNotifier {
   final Map<int, LatLng> _orderLocations = {};
   final Map<int, DateTime> _locationUpdateTimes = {};
   
+  // NEW: Track location sharing status per order
+  final Map<int, bool> _locationSharingStatus = {};
+  final Map<int, String> _orderStatus = {};
+  
   // Getters
   bool get isConnected => _isConnected;
   bool get isAuthenticated => _isAuthenticated;
@@ -55,6 +64,10 @@ class WebSocketLocationService extends ChangeNotifier {
   // Get location for specific order
   LatLng? getLocationForOrder(int orderId) => _orderLocations[orderId];
   DateTime? getLocationUpdateTimeForOrder(int orderId) => _locationUpdateTimes[orderId];
+  
+  // NEW: Get location sharing status for specific order
+  bool getLocationSharingStatusForOrder(int orderId) => _locationSharingStatus[orderId] ?? false;
+  String getOrderStatus(int orderId) => _orderStatus[orderId] ?? 'UNKNOWN';
 
   // Initialize WebSocket connection
   Future<void> initialize({
@@ -110,11 +123,11 @@ class WebSocketLocationService extends ChangeNotifier {
     }
   }
 
-  // Setup WebSocket event handlers
+  // Setup WebSocket event handlers with enhanced order event support
   void _setupEventHandlers() {
     if (_socket == null) return;
 
-    debugPrint('🔧 WebSocketLocationService: Setting up event handlers');
+    debugPrint('🔧 WebSocketLocationService: Setting up enhanced event handlers');
 
     // Connection events
     _socket!.onConnect((_) {
@@ -128,9 +141,6 @@ class WebSocketLocationService extends ChangeNotifier {
       _startPingTimer();
       notifyListeners();
     });
-
-    // Note: onConnecting is not available in socket_io_client
-    // Connection status is handled in other events
 
     _socket!.onDisconnect((reason) {
       debugPrint('🔌 WebSocketLocationService: Disconnected: $reason');
@@ -199,9 +209,30 @@ class WebSocketLocationService extends ChangeNotifier {
       _handleDriverLocationUpdate(data);
     });
 
+    _socket!.on('real_time_location', (data) {
+      debugPrint('📍 WebSocketLocationService: Received real_time_location: $data');
+      _handleDriverLocationUpdate(data);
+    });
+
     _socket!.on('current_location_response', (data) {
       debugPrint('📍 WebSocketLocationService: Received current_location_response: $data');
       _handleDriverLocationUpdate(data);
+    });
+
+    // NEW: Enhanced order and delivery events
+    _socket!.on('order_delivered', (data) {
+      debugPrint('📦 WebSocketLocationService: Order delivered: $data');
+      _handleOrderDelivered(data);
+    });
+
+    _socket!.on('location_sharing_started', (data) {
+      debugPrint('🚀 WebSocketLocationService: Location sharing started: $data');
+      _handleLocationSharingStarted(data);
+    });
+
+    _socket!.on('location_sharing_ended', (data) {
+      debugPrint('🛑 WebSocketLocationService: Location sharing ended: $data');
+      _handleLocationSharingEnded(data);
     });
 
     // Tracking status events
@@ -225,22 +256,8 @@ class WebSocketLocationService extends ChangeNotifier {
         }
         _orderLocations.remove(orderId);
         _locationUpdateTimes.remove(orderId);
-        onTrackingStarted?.call(data);
-        notifyListeners();
-      }
-    });
-
-    _socket!.on('location_sharing_ended', (data) {
-      debugPrint('🛑 WebSocketLocationService: Location sharing ended: $data');
-      if (data != null && data['orderId'] != null) {
-        final orderId = _parseOrderId(data['orderId']);
-        if (_currentOrderId == orderId) {
-          _driverLocation = null;
-          _lastLocationUpdate = null;
-        }
-        _orderLocations.remove(orderId);
-        _locationUpdateTimes.remove(orderId);
-        onLocationSharingEnded?.call('Location sharing ended for order $orderId');
+        _locationSharingStatus.remove(orderId);
+        onTrackingStopped?.call(data);
         notifyListeners();
       }
     });
@@ -279,6 +296,182 @@ class WebSocketLocationService extends ChangeNotifier {
       onConnectionStatusChange?.call('Server shutting down');
       notifyListeners();
     });
+  }
+
+  // NEW: Handle order delivered event
+  void _handleOrderDelivered(dynamic data) {
+    try {
+      debugPrint('📦 WebSocketLocationService: Processing order delivered event');
+      
+      if (data == null) return;
+      
+      Map<String, dynamic> deliveryData;
+      
+      if (data is Map<String, dynamic>) {
+        deliveryData = data;
+      } else if (data is String) {
+        try {
+          deliveryData = jsonDecode(data);
+        } catch (e) {
+          debugPrint('❌ WebSocketLocationService: Error parsing delivery JSON: $e');
+          return;
+        }
+      } else {
+        return;
+      }
+      
+      final orderId = _parseOrderId(deliveryData['orderId']);
+      if (orderId == null) return;
+      
+      // Update order status
+      _orderStatus[orderId] = 'DELIVERED';
+      _locationSharingStatus[orderId] = false;
+      
+      // Clean up location tracking
+      if (_currentOrderId == orderId) {
+        _currentOrderId = null;
+        _driverLocation = null;
+        _lastLocationUpdate = null;
+      }
+      
+      _orderLocations.remove(orderId);
+      _locationUpdateTimes.remove(orderId);
+      
+      // Notify callback
+      onOrderDelivered?.call(deliveryData);
+      onLocationSharingEnded?.call('Order $orderId delivered successfully');
+      
+      notifyListeners();
+      
+      debugPrint('✅ WebSocketLocationService: Order $orderId marked as delivered, location tracking stopped');
+      
+    } catch (e) {
+      debugPrint('❌ WebSocketLocationService: Error handling order delivered: $e');
+    }
+  }
+
+  // NEW: Handle location sharing started event
+  void _handleLocationSharingStarted(dynamic data) {
+    try {
+      debugPrint('🚀 WebSocketLocationService: Processing location sharing started event');
+      
+      if (data == null) return;
+      
+      Map<String, dynamic> sharingData;
+      
+      if (data is Map<String, dynamic>) {
+        sharingData = data;
+      } else if (data is String) {
+        try {
+          sharingData = jsonDecode(data);
+        } catch (e) {
+          debugPrint('❌ WebSocketLocationService: Error parsing sharing started JSON: $e');
+          return;
+        }
+      } else {
+        return;
+      }
+      
+      final orderId = _parseOrderId(sharingData['orderId']);
+      if (orderId == null) return;
+      
+      // Update location sharing status
+      _locationSharingStatus[orderId] = true;
+      
+      // Notify callback
+      onLocationSharingStarted?.call(sharingData);
+      
+      notifyListeners();
+      
+      debugPrint('✅ WebSocketLocationService: Location sharing started for order $orderId');
+      
+    } catch (e) {
+      debugPrint('❌ WebSocketLocationService: Error handling location sharing started: $e');
+    }
+  }
+
+  // UPDATED: Enhanced location sharing ended handler
+  void _handleLocationSharingEnded(dynamic data) {
+    try {
+      debugPrint('🛑 WebSocketLocationService: Processing location sharing ended event');
+      
+      if (data == null) return;
+      
+      Map<String, dynamic> endData;
+      
+      if (data is Map<String, dynamic>) {
+        endData = data;
+      } else if (data is String) {
+        try {
+          endData = jsonDecode(data);
+        } catch (e) {
+          debugPrint('❌ WebSocketLocationService: Error parsing sharing ended JSON: $e');
+          return;
+        }
+      } else {
+        return;
+      }
+      
+      final orderId = _parseOrderId(endData['orderId']);
+      if (orderId == null) return;
+      
+      // Update location sharing status
+      _locationSharingStatus[orderId] = false;
+      
+      // Clean up if this was the current order
+      if (_currentOrderId == orderId) {
+        _driverLocation = null;
+        _lastLocationUpdate = null;
+      }
+      
+      _orderLocations.remove(orderId);
+      _locationUpdateTimes.remove(orderId);
+      
+      // Determine reason for ending
+      final reason = endData['reason'] ?? 'unknown';
+      String message = 'Location sharing ended';
+      
+      switch (reason) {
+        case 'order_delivered':
+          message = 'Location sharing ended - Order delivered';
+          _orderStatus[orderId] = 'DELIVERED';
+          break;
+        case 'otp_verified':
+          message = 'Location sharing ended - Delivery verified with OTP';
+          _orderStatus[orderId] = 'DELIVERED';
+          break;
+        case 'driver_disconnected':
+          message = 'Location sharing ended - Driver disconnected';
+          break;
+        case 'session_timeout':
+          message = 'Location sharing ended - Session timeout';
+          break;
+        case 'manual_stop':
+          message = 'Location sharing ended - Manually stopped';
+          break;
+        case 'server_shutdown':
+          message = 'Location sharing ended - Server maintenance';
+          break;
+        default:
+          message = endData['message'] ?? 'Location sharing ended';
+      }
+      
+      // Notify callbacks
+      onLocationSharingEnded?.call(message);
+      onLocationSharingStatusChanged?.call({
+        'orderId': orderId,
+        'status': false,
+        'reason': reason,
+        'message': message,
+      });
+      
+      notifyListeners();
+      
+      debugPrint('✅ WebSocketLocationService: Location sharing ended for order $orderId: $message');
+      
+    } catch (e) {
+      debugPrint('❌ WebSocketLocationService: Error handling location sharing ended: $e');
+    }
   }
 
   // Start ping timer to keep connection alive
@@ -341,7 +534,7 @@ class WebSocketLocationService extends ChangeNotifier {
     });
   }
 
-  // Handle driver location updates
+  // UPDATED: Enhanced driver location update handler
   void _handleDriverLocationUpdate(dynamic data) {
     try {
       debugPrint('📍 WebSocketLocationService: Processing location update: $data');
@@ -404,6 +597,9 @@ class WebSocketLocationService extends ChangeNotifier {
       _orderLocations[orderId] = driverLatLng;
       _locationUpdateTimes[orderId] = updateTime;
       
+      // NEW: Update location sharing status to active when receiving location
+      _locationSharingStatus[orderId] = true;
+      
       // Update current tracking if this is the tracked order
       if (_currentOrderId == orderId || _currentOrderId == null) {
         _driverLocation = driverLatLng;
@@ -425,7 +621,7 @@ class WebSocketLocationService extends ChangeNotifier {
     }
   }
 
-  // Start tracking driver location for an order
+  // UPDATED: Enhanced start tracking with better room joining
   Future<void> startLocationTracking(int orderId) async {
     if (_socket == null || !_isConnected) {
       debugPrint('❌ WebSocketLocationService: Cannot start tracking - not connected');
@@ -433,12 +629,17 @@ class WebSocketLocationService extends ChangeNotifier {
       return;
     }
 
-    debugPrint('🎯 WebSocketLocationService: Starting location tracking for order $orderId');
+    debugPrint('🎯 WebSocketLocationService: Starting enhanced location tracking for order $orderId');
     _currentOrderId = orderId;
     
     try {
       // Send multiple events to ensure server receives the request
       _socket!.emit('start_location_tracking', {
+        'orderId': orderId,
+        'userId': _userId,
+      });
+      
+      _socket!.emit('track_order', {
         'orderId': orderId,
         'userId': _userId,
       });
@@ -460,7 +661,7 @@ class WebSocketLocationService extends ChangeNotifier {
         'orderId': orderId,
       });
       
-      debugPrint('✅ WebSocketLocationService: Sent all tracking requests for order $orderId');
+      debugPrint('✅ WebSocketLocationService: Sent all enhanced tracking requests for order $orderId');
       
     } catch (e) {
       debugPrint('❌ WebSocketLocationService: Error starting tracking: $e');
@@ -470,9 +671,9 @@ class WebSocketLocationService extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Stop tracking driver location for an order
+  // UPDATED: Enhanced stop tracking
   Future<void> stopLocationTracking(int orderId) async {
-    debugPrint('⏹️ WebSocketLocationService: Stopping location tracking for order $orderId');
+    debugPrint('⏹️ WebSocketLocationService: Stopping enhanced location tracking for order $orderId');
     
     if (_socket != null && _isConnected) {
       try {
@@ -480,7 +681,11 @@ class WebSocketLocationService extends ChangeNotifier {
           'orderId': orderId,
         });
         
-        debugPrint('✅ WebSocketLocationService: Sent stop tracking request for order $orderId');
+        _socket!.emit('stop_tracking_order', {
+          'orderId': orderId,
+        });
+        
+        debugPrint('✅ WebSocketLocationService: Sent enhanced stop tracking requests for order $orderId');
       } catch (e) {
         debugPrint('❌ WebSocketLocationService: Error stopping tracking: $e');
       }
@@ -495,6 +700,7 @@ class WebSocketLocationService extends ChangeNotifier {
     
     _orderLocations.remove(orderId);
     _locationUpdateTimes.remove(orderId);
+    _locationSharingStatus.remove(orderId);
     
     notifyListeners();
   }
@@ -516,6 +722,14 @@ class WebSocketLocationService extends ChangeNotifier {
           'longitude': longitude,
           'timestamp': DateTime.now().millisecondsSinceEpoch,
         }
+      });
+      
+      // Also emit alternative event for compatibility
+      _socket!.emit('driver_location_update', {
+        'orderId': orderId,
+        'latitude': latitude,
+        'longitude': longitude,
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
       });
       
       debugPrint('✅ WebSocketLocationService: Sent location update for order $orderId');
@@ -616,6 +830,8 @@ class WebSocketLocationService extends ChangeNotifier {
     _lastLocationUpdate = null;
     _orderLocations.clear();
     _locationUpdateTimes.clear();
+    _locationSharingStatus.clear();
+    _orderStatus.clear();
     _connectionStatus = 'Disconnected';
     
     notifyListeners();
@@ -649,7 +865,7 @@ class WebSocketLocationService extends ChangeNotifier {
     return _connectionStatus;
   }
 
-  // Get detailed connection info
+  // UPDATED: Enhanced connection info with location sharing status
   Map<String, dynamic> getConnectionInfo() {
     return {
       'isConnected': _isConnected,
@@ -664,10 +880,14 @@ class WebSocketLocationService extends ChangeNotifier {
       'hasDriverLocation': _driverLocation != null,
       'lastLocationUpdate': _lastLocationUpdate?.toIso8601String(),
       'trackedOrdersCount': _orderLocations.length,
+      'locationSharingActiveOrders': _locationSharingStatus.entries
+          .where((entry) => entry.value)
+          .map((entry) => entry.key)
+          .toList(),
     };
   }
 
-  // Get debug information
+  // UPDATED: Enhanced debug info with location sharing and order status
   Map<String, dynamic> getDebugInfo() {
     return {
       ...getConnectionInfo(),
@@ -676,8 +896,12 @@ class WebSocketLocationService extends ChangeNotifier {
           'latitude': value.latitude,
           'longitude': value.longitude,
           'updateTime': _locationUpdateTimes[key]?.toIso8601String(),
+          'locationSharingActive': _locationSharingStatus[key] ?? false,
+          'orderStatus': _orderStatus[key] ?? 'UNKNOWN',
         })
       ),
+      'locationSharingStatus': _locationSharingStatus,
+      'orderStatus': _orderStatus,
       'socketId': _socket?.id,
       'socketConnected': _socket?.connected,
     };
@@ -688,9 +912,92 @@ class WebSocketLocationService extends ChangeNotifier {
     return _currentOrderId == orderId || _orderLocations.containsKey(orderId);
   }
 
+  // NEW: Check if location sharing is active for specific order
+  bool isLocationSharingActive(int orderId) {
+    return _locationSharingStatus[orderId] ?? false;
+  }
+
   // Get all tracked orders
   List<int> getTrackedOrders() {
     return _orderLocations.keys.toList();
+  }
+
+  // NEW: Get all orders with active location sharing
+  List<int> getActiveSharingOrders() {
+    return _locationSharingStatus.entries
+        .where((entry) => entry.value)
+        .map((entry) => entry.key)
+        .toList();
+  }
+
+  // NEW: Get order status summary
+  Map<String, dynamic> getOrderStatusSummary(int orderId) {
+    return {
+      'orderId': orderId,
+      'hasLocation': _orderLocations.containsKey(orderId),
+      'currentLocation': _orderLocations[orderId] != null 
+          ? {
+              'latitude': _orderLocations[orderId]!.latitude,
+              'longitude': _orderLocations[orderId]!.longitude,
+            }
+          : null,
+      'lastUpdate': _locationUpdateTimes[orderId]?.toIso8601String(),
+      'locationSharingActive': _locationSharingStatus[orderId] ?? false,
+      'orderStatus': _orderStatus[orderId] ?? 'UNKNOWN',
+      'isCurrentlyTracked': _currentOrderId == orderId,
+    };
+  }
+
+  // NEW: Update order status manually (for sync purposes)
+  void updateOrderStatus(int orderId, String status) {
+    _orderStatus[orderId] = status;
+    
+    // If order is delivered, stop location sharing
+    if (status == 'DELIVERED') {
+      _locationSharingStatus[orderId] = false;
+      
+      // Clean up if this was the current order
+      if (_currentOrderId == orderId) {
+        _driverLocation = null;
+        _lastLocationUpdate = null;
+      }
+      
+      _orderLocations.remove(orderId);
+      _locationUpdateTimes.remove(orderId);
+    }
+    
+    notifyListeners();
+  }
+
+  // NEW: Force refresh location sharing status for an order
+  void refreshLocationSharingStatus(int orderId) {
+    if (_socket != null && _isConnected) {
+      try {
+        _socket!.emit('get_location_status', {
+          'orderId': orderId,
+        });
+        
+        debugPrint('🔄 WebSocketLocationService: Requested location sharing status for order $orderId');
+      } catch (e) {
+        debugPrint('❌ WebSocketLocationService: Error requesting location status: $e');
+      }
+    }
+  }
+
+  // Clear tracking data for specific order
+  void clearOrderTracking(int orderId) {
+    if (_currentOrderId == orderId) {
+      _currentOrderId = null;
+      _driverLocation = null;
+      _lastLocationUpdate = null;
+    }
+    
+    _orderLocations.remove(orderId);
+    _locationUpdateTimes.remove(orderId);
+    _locationSharingStatus.remove(orderId);
+    _orderStatus.remove(orderId);
+    
+    notifyListeners();
   }
 
   // Clear all tracking data
@@ -700,6 +1007,8 @@ class WebSocketLocationService extends ChangeNotifier {
     _lastLocationUpdate = null;
     _orderLocations.clear();
     _locationUpdateTimes.clear();
+    _locationSharingStatus.clear();
+    _orderStatus.clear();
     notifyListeners();
   }
 

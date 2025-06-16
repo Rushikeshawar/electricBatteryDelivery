@@ -1,8 +1,14 @@
+// Updated ProfileScreen with provider functionality
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:electric_battery_delivery_frontend/components/app_theme.dart';
 import 'package:electric_battery_delivery_frontend/login_screen.dart';
 import '../providers/profile_provider.dart';
+import '../providers/provider_providers.dart';
+import '../screens/become_provider_screen.dart';
+import '../screens/provider_status_screen.dart';
+import '../screens/charging_providers_screen.dart';
+import '../screens/provider_dashboard_screen.dart';
 
 class ProfileScreen extends ConsumerWidget {
   const ProfileScreen({Key? key}) : super(key: key);
@@ -24,6 +30,10 @@ class ProfileScreen extends ConsumerWidget {
     
     // Watch profile stats
     final profileStats = ref.watch(profileStatsProvider);
+    
+    // Watch provider status
+    final isProvider = ref.watch(isProviderProvider);
+    final hasPendingRequest = ref.watch(hasPendingProviderRequestProvider);
     
     return Scaffold(
       body: profileState.isLoading
@@ -58,6 +68,8 @@ class ProfileScreen extends ConsumerWidget {
                     ),
                   _buildProfileInfo(context, ref, params, profileState),
                   _buildQuickStats(profileStats),
+                  // Provider Section - NEW
+                  _buildProviderSection(context, ref, isProvider, hasPendingRequest),
                   _buildPreferences(context, ref, params, profileState),
                   _buildVehicles(context, ref, params, profileState),
                   _buildAbout(context),
@@ -77,6 +89,382 @@ class ProfileScreen extends ConsumerWidget {
       ),
     );
   }
+
+  // NEW: Provider Section
+  // Add this enhanced provider section to your ProfileScreen
+
+// Replace ONLY the _buildProviderSection method in your ProfileScreen
+// Do NOT add the _buildQuickAccessCard method since it already exists
+
+Widget _buildProviderSection(BuildContext context, WidgetRef ref, bool isProvider, bool hasPendingRequest) {
+  return Card(
+    margin: const EdgeInsets.all(16),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Icon(
+                Icons.ev_station,
+                color: Colors.green.shade600,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Charging Services',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey.shade800,
+                ),
+              ),
+            ],
+          ),
+        ),
+        
+        // Quick Access Cards for Charging Services (using existing method)
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            children: [
+           Expanded(
+  child: _buildQuickAccessCard(
+    context,
+    'Find Stations',
+    'Discover nearby charging points',
+    Icons.search,
+    Colors.blue,
+    () {
+      // Get user info from the provider
+      final userInfo = ref.read(userInfoProvider);
+      
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => ChargingProvidersScreen(
+            userName: userInfo['userName'] ?? 'User',
+            userEmail: userInfo['userEmail'] ?? 'user@email.com',
+          ),
+        ),
+      ).catchError((e) {
+        print('Navigation error: $e');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error opening charging providers: $e'),
+            backgroundColor: Colors.red.shade600,
+          ),
+        );
+      });
+    },
+  ),
+),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _buildQuickAccessCard(
+                  context,
+                  'My Bookings',
+                  'View charging bookings',
+                  Icons.book_online,
+                  Colors.purple,
+                  () {
+                    // Navigate using route name instead of direct import
+                    Navigator.pushNamed(
+                      context,
+                      '/my-bookings',
+                      arguments: {
+                        'userName': 'User', // Get from your user provider
+                        'userEmail': 'user@email.com', // Get from your user provider
+                      },
+                    ).catchError((e) {
+                      // Show placeholder message if route doesn't exist
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('My bookings feature coming soon!'),
+                          backgroundColor: Colors.purple.shade600,
+                        ),
+                      );
+                    });
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+        
+        const SizedBox(height: 16),
+        
+        // Provider Status Section
+        if (isProvider) ...[
+          // User is an approved provider
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 16),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.green.shade50,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.green.shade200),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.check_circle,
+                  color: Colors.green.shade600,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'You are an approved provider!',
+                    style: TextStyle(
+                      color: Colors.green.shade700,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.green.shade600,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Text(
+                    'ACTIVE',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          ListTile(
+            leading: Icon(
+              Icons.dashboard,
+              color: Colors.blue.shade600,
+            ),
+            title: const Text('Provider Dashboard'),
+            subtitle: const Text('Manage your charging station and bookings'),
+            trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+            onTap: () {
+              Navigator.pushNamed(context, '/provider-dashboard').catchError((e) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Provider dashboard coming soon!'),
+                    backgroundColor: Colors.blue.shade600,
+                  ),
+                );
+              });
+            },
+          ),
+          ListTile(
+            leading: Icon(
+              Icons.analytics,
+              color: Colors.purple.shade600,
+            ),
+            title: const Text('View Provider Status'),
+            subtitle: const Text('Check your provider profile and settings'),
+            trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+            onTap: () {
+              Navigator.pushNamed(context, '/provider-status');
+            },
+          ),
+        ] else if (hasPendingRequest) ...[
+          // User has a pending provider request
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 16),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.orange.shade50,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.orange.shade200),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.hourglass_empty,
+                  color: Colors.orange.shade600,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Your provider request is under review',
+                    style: TextStyle(
+                      color: Colors.orange.shade700,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.shade600,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Text(
+                    'PENDING',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          ListTile(
+            leading: Icon(
+              Icons.visibility,
+              color: Colors.orange.shade600,
+            ),
+            title: const Text('Check Request Status'),
+            subtitle: const Text('View your provider request details and status'),
+            trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+            onTap: () {
+              Navigator.pushNamed(context, '/provider-status');
+            },
+          ),
+        ] else ...[
+          // User is not a provider and has no pending request
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 16),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.blue.shade50,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.blue.shade200),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.lightbulb_outline,
+                      color: Colors.blue.shade600,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Earn Money with Your EV Charger',
+                      style: TextStyle(
+                        color: Colors.blue.shade700,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Join our provider network and start earning by offering EV charging services to other users.',
+                  style: TextStyle(
+                    color: Colors.blue.shade600,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          ListTile(
+            leading: Icon(
+              Icons.add_business,
+              color: Colors.green.shade600,
+            ),
+            title: const Text('Become a Provider'),
+            subtitle: const Text('Start earning by providing EV charging services'),
+            trailing: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.green.shade600,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Text(
+                'NEW',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            onTap: () {
+              Navigator.pushNamed(context, '/become-provider');
+            },
+          ),
+          ListTile(
+            leading: Icon(
+              Icons.info_outline,
+              color: Colors.grey.shade600,
+            ),
+            title: const Text('Provider Benefits'),
+            subtitle: const Text('Learn about earnings and benefits'),
+            trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+            onTap: () => _showProviderBenefitsDialog(context),
+          ),
+        ],
+        const SizedBox(height: 8),
+      ],
+    ),
+  );
+}
+// Add this helper method for quick access cards
+Widget _buildQuickAccessCard(
+  BuildContext context,
+  String title,
+  String subtitle,
+  IconData icon,
+  Color color,
+  VoidCallback onTap,
+) {
+  return Card(
+    elevation: 2,
+    child: InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(
+                icon,
+                color: color,
+                size: 24,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              title,
+              style: const TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 14,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              subtitle,
+              style: TextStyle(
+                color: Colors.grey.shade600,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
 
   Widget _buildAppBar(ProfileState state) {
     return SliverAppBar(
@@ -435,6 +823,88 @@ Widget _buildQuickStats(ProfileStats stats) {
     );
   }
 
+  void _showProviderBenefitsDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.ev_station, color: Colors.green.shade600),
+            const SizedBox(width: 8),
+            const Text('Provider Benefits'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildBenefitItem('💰', 'Earn Money', 'Get paid for every charging session'),
+            _buildBenefitItem('📅', 'Flexible Schedule', 'Set your own availability'),
+            _buildBenefitItem('🎯', 'Easy Management', 'Simple dashboard to track earnings'),
+            _buildBenefitItem('⭐', 'Build Reputation', 'Get rated by customers'),
+            _buildBenefitItem('🔒', 'Secure Payments', 'Guaranteed payments through our platform'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const BecomeProviderScreen(),
+                ),
+              );
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.green.shade600,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Get Started'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBenefitItem(String emoji, String title, String description) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(emoji, style: const TextStyle(fontSize: 20)),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                Text(
+                  description,
+                  style: TextStyle(
+                    color: Colors.grey.shade600,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // All the existing methods remain the same...
   void _showLanguageSelector(
       BuildContext context, WidgetRef ref, (String, String, String) params, ProfileState state) {
     showModalBottomSheet(

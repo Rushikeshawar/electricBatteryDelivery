@@ -184,6 +184,10 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
   DateTime? _lastLocationUpdate;
   Timer? _routeUpdateTimer;
 
+  // NEW: Location sharing status tracking
+  bool _isLocationSharingActive = false;
+  String _locationSharingStatus = 'Unknown';
+
   @override
   void initState() {
     super.initState();
@@ -224,6 +228,24 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
           SnackBar(
             content: Text('WebSocket Error: $error'),
             backgroundColor: Colors.red,
+          ),
+        );
+      }
+    };
+
+    // NEW: Handle location sharing ended
+    webSocketService.onLocationSharingEnded = (message) {
+      if (mounted) {
+        setState(() {
+          _isLocationSharingActive = false;
+          _locationSharingStatus = 'Ended';
+        });
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Location sharing ended: $message'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 4),
           ),
         );
       }
@@ -303,10 +325,113 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
     final webSocketService = ref.read(webSocketLocationServiceProvider);
 
     if (webSocketService.socket != null) {
+      // Join multiple rooms for comprehensive coverage
       webSocketService.socket!.emit('join_order_room', {
         'orderId': widget.orderId,
         'userId': userId,
       });
+
+      webSocketService.socket!.emit('track_order', {
+        'orderId': widget.orderId,
+        'userId': userId,
+      });
+
+      // Set up additional event listeners for delivery events
+      webSocketService.socket!.on('order_delivered', (data) {
+        if (data != null && data['orderId'] == widget.orderId) {
+          _handleOrderDelivered(data);
+        }
+      });
+
+      webSocketService.socket!.on('location_sharing_started', (data) {
+        if (data != null && data['orderId'] == widget.orderId) {
+          _handleLocationSharingStarted(data);
+        }
+      });
+
+      print('🏠 User: Joined all tracking rooms for order ${widget.orderId}');
+    }
+  }
+
+  // NEW: Handle order delivered event
+  void _handleOrderDelivered(Map<String, dynamic> data) {
+    if (mounted) {
+      setState(() {
+        _isLocationSharingActive = false;
+        _locationSharingStatus = 'Order Delivered';
+      });
+
+      // Show delivery confirmation
+      showDialog(
+        context: context,
+        builder: (BuildContext context) {
+          return AlertDialog(
+            icon: Icon(Icons.check_circle, color: Colors.green, size: 48),
+            title: Text('Order Delivered! 🎉'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Your order has been delivered successfully!'),
+                if (data['otpVerified'] == true) ...[
+                  SizedBox(height: 8),
+                  Container(
+                    padding: EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.green.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.verified, color: Colors.green, size: 16),
+                        SizedBox(width: 8),
+                        Text(
+                          'Verified with OTP',
+                          style: TextStyle(
+                            color: Colors.green[700],
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                SizedBox(height: 12),
+                Text(
+                  'Location tracking has been stopped automatically.',
+                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  _loadOrderData(); // Refresh order data
+                },
+                child: Text('OK'),
+              ),
+            ],
+          );
+        },
+      );
+    }
+  }
+
+  // NEW: Handle location sharing started event
+  void _handleLocationSharingStarted(Map<String, dynamic> data) {
+    if (mounted) {
+      setState(() {
+        _isLocationSharingActive = true;
+        _locationSharingStatus = 'Active';
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Driver started sharing location'),
+          backgroundColor: Colors.green,
+          duration: Duration(seconds: 3),
+        ),
+      );
     }
   }
 
@@ -369,6 +494,13 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
             // Start WebSocket tracking if order is in transit
             if (order.status == 'IN_TRANSIT') {
               _startLocationTracking();
+              // Check if location sharing is active
+              _checkLocationSharingStatus();
+            } else if (order.status == 'DELIVERED') {
+              setState(() {
+                _isLocationSharingActive = false;
+                _locationSharingStatus = 'Order Delivered';
+              });
             }
           } else {
             setState(() {
@@ -399,6 +531,36 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
         _orderError = 'Error loading order: $e';
         _isLoadingOrder = false;
       });
+    }
+  }
+
+  // NEW: Check location sharing status from server
+  Future<void> _checkLocationSharingStatus() async {
+    try {
+      final loginState = ref.read(loginProvider);
+      final token = loginState.user.token;
+
+      if (token == null) return;
+
+      final response = await http.get(
+        Uri.parse('http://localhost:3000/api/users/orders/${widget.orderId}/location-status'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final responseData = json.decode(response.body);
+        if (responseData['success'] == true && responseData['data'] != null) {
+          setState(() {
+            _isLocationSharingActive = responseData['data']['isLocationSharingActive'] ?? false;
+            _locationSharingStatus = _isLocationSharingActive ? 'Active' : 'Inactive';
+          });
+        }
+      }
+    } catch (e) {
+      print('Error checking location sharing status: $e');
     }
   }
 
@@ -448,10 +610,17 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
       final userId = int.tryParse(loginState.user.id.toString());
 
       if (userId != null) {
-        // Send start tracking with user ID for server mapping
+        // Send enhanced tracking request with user ID for server mapping
         webSocketService.socket?.emit('start_location_tracking', {
           'orderId': widget.orderId,
           'userId': userId,
+        });
+
+        // Also emit track_order for comprehensive coverage
+        webSocketService.socket?.emit('track_order', {
+          'orderId': widget.orderId,
+          'userId': userId,
+          'orderNumber': _order?.orderNumber,
         });
       }
 
@@ -487,6 +656,14 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
     });
 
     final webSocketService = ref.read(webSocketLocationServiceProvider);
+    
+    // Emit stop tracking to server
+    if (webSocketService.socket != null) {
+      webSocketService.socket!.emit('stop_tracking_order', {
+        'orderId': widget.orderId,
+      });
+    }
+    
     await webSocketService.stopLocationTracking(widget.orderId);
 
     _routeUpdateTimer?.cancel();
@@ -531,6 +708,12 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
           ),
         ),
       );
+
+      // Update location sharing status to active when we receive location
+      if (!_isLocationSharingActive) {
+        _isLocationSharingActive = true;
+        _locationSharingStatus = 'Active';
+      }
     });
 
     // Fetch real route from Google Directions API
@@ -656,7 +839,7 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
         Polyline(
           polylineId: const PolylineId('driving_route'),
           points: _currentRoute!.points,
-          color: Colors.blue,
+          color: _isLocationSharingActive ? Colors.green : Colors.blue,
           width: 4,
           patterns: [],
         ),
@@ -684,7 +867,7 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
         Polyline(
           polylineId: const PolylineId('straight_route'),
           points: [_driverCurrentLocation!, _userDeliveryLocation!],
-          color: Colors.blue,
+          color: _isLocationSharingActive ? Colors.green : Colors.blue,
           width: 3,
           patterns: [PatternItem.dash(10), PatternItem.gap(5)],
         ),
@@ -771,7 +954,7 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
     }
   }
 
-  // Format time ago
+ // Format time ago
   String _getTimeAgo(DateTime dateTime) {
     final Duration difference = DateTime.now().difference(dateTime);
 
@@ -883,6 +1066,7 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
       appBar: AppBar(
         title: Text('Track Order ${_order?.orderNumber ?? ''}'),
         actions: [
+          // NEW: Enhanced connection and sharing status indicator
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             margin: const EdgeInsets.only(right: 8),
@@ -906,6 +1090,36 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
                   style: TextStyle(
                     fontSize: 12,
                     color: webSocketService.isConnected ? Colors.green : Colors.red,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // NEW: Location sharing status indicator
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            margin: const EdgeInsets.only(right: 8),
+            decoration: BoxDecoration(
+              color: _isLocationSharingActive
+                  ? Colors.blue.withOpacity(0.2)
+                  : Colors.grey.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  _isLocationSharingActive ? Icons.location_on : Icons.location_off,
+                  size: 16,
+                  color: _isLocationSharingActive ? Colors.blue : Colors.grey,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  _locationSharingStatus,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: _isLocationSharingActive ? Colors.blue : Colors.grey,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
@@ -948,6 +1162,7 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
             trafficEnabled: true,
             buildingsEnabled: true,
           ),
+          // NEW: Enhanced status indicator with location sharing info
           Positioned(
             top: 16,
             left: 16,
@@ -988,9 +1203,11 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                         decoration: BoxDecoration(
-                          color: _isTrackingActive
+                          color: _isLocationSharingActive
                               ? Colors.green.withOpacity(0.2)
-                              : Colors.grey.withOpacity(0.2),
+                              : _isTrackingActive
+                                  ? Colors.blue.withOpacity(0.2)
+                                  : Colors.grey.withOpacity(0.2),
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Row(
@@ -1004,11 +1221,19 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
                               ),
                             if (_isLoadingRoute) const SizedBox(width: 4),
                             Text(
-                              _isTrackingActive ? (_isLoadingRoute ? 'UPDATING' : 'TRACKING') : 'NOT TRACKING',
+                              _isLocationSharingActive
+                                  ? (_isLoadingRoute ? 'UPDATING' : 'LIVE TRACKING')
+                                  : _isTrackingActive
+                                      ? 'WAITING FOR DRIVER'
+                                      : 'NOT TRACKING',
                               style: TextStyle(
                                 fontSize: 10,
                                 fontWeight: FontWeight.bold,
-                                color: _isTrackingActive ? Colors.green : Colors.grey,
+                                color: _isLocationSharingActive
+                                    ? Colors.green
+                                    : _isTrackingActive
+                                        ? Colors.blue
+                                        : Colors.grey,
                               ),
                             ),
                           ],
@@ -1073,13 +1298,57 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
                         ),
                         const SizedBox(width: 8),
                         Text(
-                          'Waiting for driver location...',
+                          _isLocationSharingActive 
+                              ? 'Receiving driver location updates...' 
+                              : 'Waiting for driver to start sharing location...',
                           style: TextStyle(
                             color: Colors.grey.shade600,
                             fontSize: 12,
                           ),
                         ),
                       ],
+                    ),
+                  ],
+                  // NEW: Location sharing status
+                  if (_order?.status == 'IN_TRANSIT') ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: _isLocationSharingActive 
+                            ? Colors.green.shade50 
+                            : Colors.orange.shade50,
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                          color: _isLocationSharingActive 
+                              ? Colors.green.shade200 
+                              : Colors.orange.shade200,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            _isLocationSharingActive ? Icons.gps_fixed : Icons.gps_not_fixed,
+                            size: 16,
+                            color: _isLocationSharingActive ? Colors.green : Colors.orange,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              _isLocationSharingActive
+                                  ? 'Driver is sharing live location'
+                                  : 'Driver location sharing: $_locationSharingStatus',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: _isLocationSharingActive 
+                                    ? Colors.green.shade700 
+                                    : Colors.orange.shade700,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ],
@@ -1114,13 +1383,13 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
                           width: 12,
                           height: 3,
                           decoration: BoxDecoration(
-                            color: Colors.blue,
+                            color: _isLocationSharingActive ? Colors.green : Colors.blue,
                             borderRadius: BorderRadius.circular(1),
                           ),
                         ),
                         const SizedBox(width: 6),
                         Text(
-                          'Route',
+                          _isLocationSharingActive ? 'Live Route' : 'Route',
                           style: TextStyle(
                             fontSize: 11,
                             color: Colors.grey.shade700,
@@ -1242,7 +1511,9 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
                                         ),
                                         if (_isTrackingActive)
                                           Text(
-                                            'Tracking active - receiving updates',
+                                            _isLocationSharingActive 
+                                                ? 'Receiving live driver location updates'
+                                                : 'Tracking active - waiting for driver to share location',
                                             style: TextStyle(
                                               fontSize: 12,
                                               color: Colors.grey.shade600,
@@ -1258,12 +1529,51 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
                                     ),
                                 ],
                               ),
+                              // NEW: Location sharing status indicator
+                              if (_order?.status == 'IN_TRANSIT') ...[
+                                const SizedBox(height: 8),
+                                Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: _isLocationSharingActive 
+                                        ? Colors.blue.shade50 
+                                        : Colors.orange.shade50,
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        _isLocationSharingActive ? Icons.navigation : Icons.location_searching,
+                                        size: 16,
+                                        color: _isLocationSharingActive 
+                                            ? Colors.blue.shade700 
+                                            : Colors.orange.shade700,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          _isLocationSharingActive
+                                              ? 'Driver is actively sharing location with real-time updates'
+                                              : 'Driver location sharing: $_locationSharingStatus',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: _isLocationSharingActive 
+                                                ? Colors.blue.shade700 
+                                                : Colors.orange.shade700,
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
                               if (_currentRoute != null) ...[
                                 const SizedBox(height: 8),
                                 Container(
                                   padding: const EdgeInsets.all(8),
                                   decoration: BoxDecoration(
-                                    color: Colors.blue.shade50,
+                                    color: Colors.purple.shade50,
                                     borderRadius: BorderRadius.circular(6),
                                   ),
                                   child: Row(
@@ -1271,17 +1581,17 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
                                       Icon(
                                         _currentRoute!.points.length > 2 ? Icons.navigation : Icons.linear_scale,
                                         size: 16,
-                                        color: Colors.blue.shade700,
+                                        color: Colors.purple.shade700,
                                       ),
                                       const SizedBox(width: 8),
                                       Expanded(
                                         child: Text(
                                           _currentRoute!.points.length > 2
-                                              ? 'Using Google Maps routing with real-time traffic'
-                                              : 'Using direct route (limited road data)',
+                                              ? 'Using Google Maps routing with real-time traffic data'
+                                              : 'Using direct route estimation (limited road data available)',
                                           style: TextStyle(
                                             fontSize: 12,
-                                            color: Colors.blue.shade700,
+                                            color: Colors.purple.shade700,
                                             fontWeight: FontWeight.w500,
                                           ),
                                         ),
@@ -1295,7 +1605,7 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
                         ),
                         const SizedBox(height: 16),
                         if (_currentRoute != null) ...[
-                          _buildSectionTitle('Route Information'),
+                          _buildSectionTitle('Live Route Information'),
                           const SizedBox(height: 8),
                           Container(
                             padding: const EdgeInsets.all(12),
@@ -1324,7 +1634,7 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
                                     Expanded(
                                       child: _buildRouteInfoItem(
                                         Icons.schedule,
-                                        'Duration',
+                                        'ETA',
                                         _currentRoute!.duration,
                                         Colors.green,
                                       ),
@@ -1337,7 +1647,9 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
                                     width: double.infinity,
                                     padding: const EdgeInsets.all(8),
                                     decoration: BoxDecoration(
-                                      color: Colors.orange.shade50,
+                                      color: _isLocationSharingActive 
+                                          ? Colors.green.shade50 
+                                          : Colors.orange.shade50,
                                       borderRadius: BorderRadius.circular(6),
                                     ),
                                     child: Row(
@@ -1345,14 +1657,18 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
                                         Icon(
                                           Icons.update,
                                           size: 16,
-                                          color: Colors.orange.shade700,
+                                          color: _isLocationSharingActive 
+                                              ? Colors.green.shade700 
+                                              : Colors.orange.shade700,
                                         ),
                                         const SizedBox(width: 8),
                                         Text(
                                           'Last updated: ${_getTimeAgo(_lastLocationUpdate!)}',
                                           style: TextStyle(
                                             fontSize: 12,
-                                            color: Colors.orange.shade700,
+                                            color: _isLocationSharingActive 
+                                                ? Colors.green.shade700 
+                                                : Colors.orange.shade700,
                                             fontWeight: FontWeight.w500,
                                           ),
                                         ),
@@ -1483,6 +1799,8 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
                                   : () {
                                       if (_driverCurrentLocation != null && _userDeliveryLocation != null) {
                                         _fetchRouteFromGoogleDirections();
+                                      } else {
+                                        _checkLocationSharingStatus();
                                       }
                                     },
                               icon: _isLoadingRoute
@@ -1492,12 +1810,54 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
                                       child: CircularProgressIndicator(strokeWidth: 2),
                                     )
                                   : const Icon(Icons.refresh),
-                              label: Text(_isLoadingRoute ? 'Updating Route...' : 'Refresh Route'),
+                              label: Text(_isLoadingRoute 
+                                  ? 'Updating Route...' 
+                                  : _driverCurrentLocation != null 
+                                      ? 'Refresh Route'
+                                      : 'Check Location Status'),
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: Colors.orange,
                                 foregroundColor: Colors.white,
                                 padding: const EdgeInsets.symmetric(vertical: 12),
                               ),
+                            ),
+                          ),
+                        ] else if (_order?.status == 'DELIVERED') ...[
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.green.shade50,
+                              border: Border.all(color: Colors.green.shade200),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(Icons.check_circle, color: Colors.green, size: 24),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'Order Delivered Successfully! 🎉',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.green.shade700,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        'Thank you for using our service!',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.green.shade600,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ],
@@ -1521,10 +1881,14 @@ class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
               child: const Icon(Icons.center_focus_strong),
               tooltip: 'Center on Route',
             ),
-          if (_driverCurrentLocation != null && _userDeliveryLocation != null) const SizedBox(height: 16),
+          if (_driverCurrentLocation != null && _userDeliveryLocation != null) 
+            const SizedBox(height: 16),
           FloatingActionButton(
             heroTag: "refresh",
-            onPressed: _loadOrderData,
+            onPressed: () {
+              _loadOrderData();
+              _checkLocationSharingStatus();
+            },
             backgroundColor: Colors.blue,
             child: const Icon(Icons.refresh),
             tooltip: 'Refresh Order Data',
