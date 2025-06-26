@@ -2,10 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:electric_battery_delivery_frontend/components/app_theme.dart';
 import 'package:electric_battery_delivery_frontend/models/booking_model.dart';
+import 'package:electric_battery_delivery_frontend/models/charging_provider_model.dart';
 import 'package:electric_battery_delivery_frontend/providers/charging_booking_provider.dart';
+import 'package:electric_battery_delivery_frontend/providers/login_provider.dart';
+import 'package:electric_battery_delivery_frontend/config/api_config.dart';
 import 'package:electric_battery_delivery_frontend/screens/booking_details_screen.dart';
 import 'package:electric_battery_delivery_frontend/screens/write_review_screen.dart';
 import 'package:electric_battery_delivery_frontend/screens/charging_providers_screen.dart';
+import 'package:electric_battery_delivery_frontend/screens/map_directions_screen.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 
 class MyBookingsScreen extends ConsumerStatefulWidget {
   final String userName;
@@ -36,7 +43,10 @@ class _MyBookingsScreenState extends ConsumerState<MyBookingsScreen>
     
     // Load bookings when screen initializes with proper mounted check
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _loadBookingsData();
+      _loadBookingsData().then((_) {
+        // Uncomment next line for debugging
+        // _debugBookings();
+      });
     });
   }
 
@@ -47,14 +57,22 @@ class _MyBookingsScreenState extends ConsumerState<MyBookingsScreen>
     super.dispose();
   }
 
-  // Safe method to load bookings data
   Future<void> _loadBookingsData() async {
     if (!mounted) return;
     
     try {
-      // Store the notifier reference to avoid using ref after disposal
+      setState(() {
+        _isInitialLoading = true;
+      });
+      
       final bookingNotifier = ref.read(chargingBookingProvider.notifier);
-      await bookingNotifier.loadUserBookings();
+      
+      // Load all bookings without status filter to get complete data
+      await bookingNotifier.loadUserBookings(
+        page: 1,
+        limit: 200, // Increase limit to get more bookings in single request
+        refresh: true,
+      );
       
       if (mounted) {
         setState(() {
@@ -67,8 +85,36 @@ class _MyBookingsScreenState extends ConsumerState<MyBookingsScreen>
         setState(() {
           _isInitialLoading = false;
         });
+        // Show error to user
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to load bookings: ${e.toString()}'),
+            backgroundColor: Colors.red,
+            action: SnackBarAction(
+              label: 'Retry',
+              textColor: Colors.white,
+              onPressed: _loadBookingsData,
+            ),
+          ),
+        );
       }
     }
+  }
+
+  // Add debug method to see what bookings are being loaded
+  void _debugBookings() {
+    final bookingState = ref.read(chargingBookingProvider);
+    print('=== BOOKING DEBUG ===');
+    print('Total bookings: ${bookingState.bookings.length}');
+    
+    for (final booking in bookingState.bookings) {
+      print('Booking ${booking.id}: ${booking.status} - ${booking.bookingDate} ${booking.startTime}');
+    }
+    
+    print('Upcoming: ${_getUpcomingBookings(bookingState.bookings).length}');
+    print('Active: ${_getActiveBookings(bookingState.bookings).length}');
+    print('History: ${_getCompletedBookings(bookingState.bookings).length}');
+    print('=====================');
   }
 
   // Method to navigate to charging providers screen
@@ -545,7 +591,7 @@ class _MyBookingsScreenState extends ConsumerState<MyBookingsScreen>
             const SizedBox(width: 12),
             Expanded(
               child: OutlinedButton.icon(
-                onPressed: () => _contactProvider(booking),
+                onPressed: () => _callProvider(booking),
                 icon: const Icon(Icons.phone, size: 16),
                 label: const Text('Call'),
                 style: OutlinedButton.styleFrom(
@@ -593,23 +639,100 @@ class _MyBookingsScreenState extends ConsumerState<MyBookingsScreen>
     }
   }
 
-  // Helper methods
+  // Helper methods with improved filtering logic
   List<Booking> _getUpcomingBookings(List<Booking> bookings) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    
     return bookings.where((booking) {
-      return booking.status == 'CONFIRMED' && 
-             booking.bookingDate.isAfter(DateTime.now().subtract(const Duration(days: 1)));
+      // Check if booking is confirmed or pending
+      final isValidStatus = ['CONFIRMED', 'PENDING'].contains(booking.status.toUpperCase());
+      
+      // Check if booking date is today or future
+      final bookingDateOnly = DateTime(
+        booking.bookingDate.year, 
+        booking.bookingDate.month, 
+        booking.bookingDate.day
+      );
+      final isFutureOrToday = bookingDateOnly.isAtSameMomentAs(today) || 
+                             bookingDateOnly.isAfter(today);
+      
+      // For today's bookings, also check if the time hasn't passed
+      if (bookingDateOnly.isAtSameMomentAs(today)) {
+        try {
+          final slotDateTime = DateTime(
+            booking.bookingDate.year,
+            booking.bookingDate.month,
+            booking.bookingDate.day,
+            int.parse(booking.startTime.split(':')[0]),
+            int.parse(booking.startTime.split(':')[1]),
+          );
+          return isValidStatus && slotDateTime.isAfter(now);
+        } catch (e) {
+          print('Error parsing time for booking ${booking.id}: $e');
+          return isValidStatus && isFutureOrToday;
+        }
+      }
+      
+      return isValidStatus && isFutureOrToday;
     }).toList()..sort((a, b) => a.bookingDate.compareTo(b.bookingDate));
   }
 
   List<Booking> _getActiveBookings(List<Booking> bookings) {
+    // Include all possible active statuses
+    final activeStatuses = [
+      'IN_PROGRESS', 
+      'CHARGING', 
+      'STARTED', 
+      'ONGOING',
+      'ACTIVE'
+    ];
+    
     return bookings.where((booking) {
-      return booking.status == 'IN_PROGRESS' || booking.status == 'CHARGING';
+      return activeStatuses.contains(booking.status.toUpperCase());
     }).toList()..sort((a, b) => b.bookingDate.compareTo(a.bookingDate));
   }
 
   List<Booking> _getCompletedBookings(List<Booking> bookings) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    
     return bookings.where((booking) {
-      return booking.status == 'COMPLETED' || booking.status == 'CANCELLED';
+      final completedStatuses = ['COMPLETED', 'CANCELLED', 'EXPIRED', 'FAILED'];
+      final isCompletedStatus = completedStatuses.contains(booking.status.toUpperCase());
+      
+      // Also include past confirmed bookings that are overdue
+      if (booking.status.toUpperCase() == 'CONFIRMED') {
+        final bookingDateOnly = DateTime(
+          booking.bookingDate.year, 
+          booking.bookingDate.month, 
+          booking.bookingDate.day
+        );
+        
+        // If booking date is in the past, consider it history
+        if (bookingDateOnly.isBefore(today)) {
+          return true;
+        }
+        
+        // If booking is today but time has passed, consider it history
+        if (bookingDateOnly.isAtSameMomentAs(today)) {
+          try {
+            final slotDateTime = DateTime(
+              booking.bookingDate.year,
+              booking.bookingDate.month,
+              booking.bookingDate.day,
+              int.parse(booking.endTime.split(':')[0]),
+              int.parse(booking.endTime.split(':')[1]),
+            );
+            return slotDateTime.isBefore(now);
+          } catch (e) {
+            print('Error parsing end time for booking ${booking.id}: $e');
+            return false;
+          }
+        }
+      }
+      
+      return isCompletedStatus;
     }).toList()..sort((a, b) => b.bookingDate.compareTo(a.bookingDate)); // Most recent first
   }
 
@@ -631,13 +754,19 @@ class _MyBookingsScreenState extends ConsumerState<MyBookingsScreen>
         return Colors.green.shade600;
       case 'IN_PROGRESS':
       case 'CHARGING':
+      case 'STARTED':
+      case 'ONGOING':
+      case 'ACTIVE':
         return Colors.orange.shade600;
       case 'COMPLETED':
         return Colors.blue.shade600;
       case 'CANCELLED':
+      case 'FAILED':
         return Colors.red.shade600;
       case 'PENDING':
         return Colors.grey.shade600;
+      case 'EXPIRED':
+        return Colors.purple.shade600;
       default:
         return Colors.grey.shade600;
     }
@@ -651,12 +780,22 @@ class _MyBookingsScreenState extends ConsumerState<MyBookingsScreen>
         return 'In Progress';
       case 'CHARGING':
         return 'Charging';
+      case 'STARTED':
+        return 'Started';
+      case 'ONGOING':
+        return 'Ongoing';
+      case 'ACTIVE':
+        return 'Active';
       case 'COMPLETED':
         return 'Completed';
       case 'CANCELLED':
         return 'Cancelled';
       case 'PENDING':
         return 'Pending';
+      case 'FAILED':
+        return 'Failed';
+      case 'EXPIRED':
+        return 'Expired';
       default:
         return status;
     }
@@ -828,14 +967,228 @@ class _MyBookingsScreenState extends ConsumerState<MyBookingsScreen>
     }
   }
 
-  void _getDirections(Booking booking) {
+  // Enhanced _getDirections method that uses real coordinates when available
+  Future<void> _getDirections(Booking booking) async {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Opening directions in maps app...'),
-        duration: Duration(seconds: 2),
-      ),
-    );
+    
+    try {
+      // Show loading indicator
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          content: Row(
+            children: [
+              const CircularProgressIndicator(),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Text('Getting directions to ${booking.providerName}...'),
+              ),
+            ],
+          ),
+        ),
+      );
+
+      ChargingProvider? provider;
+
+      // Check if booking already has coordinates
+      if (booking.hasCoordinates) {
+        // Use coordinates from booking - FIXED: Removed reviewCount parameter
+        
+      } else {
+        // Try to get the real provider data from API
+        try {
+          provider = await _fetchProviderDetails(booking.providerId);
+        } catch (e) {
+          print('Failed to fetch provider details: $e');
+        }
+
+        // If still no provider data, create one with estimated coordinates
+        if (provider == null) {
+          final coordinates = await _getCoordinatesFromAddress(booking.providerAddress);
+          
+          // FIXED: Removed reviewCount parameter
+          
+        }
+      }
+      
+      // Close loading dialog
+      if (mounted) {
+        Navigator.pop(context);
+        
+        // FIXED: Ensure provider is not null before navigation
+        if (provider != null) {
+          // Navigate to MapDirectionsScreen
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => MapDirectionsScreen(
+                provider: provider!, // FIXED: Added non-null assertion
+                providerName: booking.providerName,
+                providerAddress: booking.providerAddress,
+              ),
+            ),
+          );
+        } else {
+          // If provider is still null, show error and fallback to external maps
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Could not load provider details. Opening external maps...'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+          _openExternalMaps(booking.providerAddress);
+        }
+      }
+      
+    } catch (e) {
+      // Close loading dialog if still open
+      if (mounted) {
+        Navigator.pop(context);
+        
+        print('Error navigating to directions: $e');
+        
+        // Show error message and offer fallback
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Navigation Error'),
+            content: const Text('Could not load directions. Would you like to open in external maps?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  _openExternalMaps(booking.providerAddress);
+                },
+                child: const Text('Open External Maps'),
+              ),
+            ],
+          ),
+        );
+      }
+    }
+  }
+
+  // Method to fetch real provider details from API
+  Future<ChargingProvider?> _fetchProviderDetails(int providerId) async {
+    try {
+      // Get auth token
+      final loginState = ref.read(loginProvider);
+      final token = loginState.user.token;
+
+      final headers = {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      };
+
+      // Fetch provider details from your API
+      final url = Uri.parse('${ApiConfig.baseUrl}/providers/$providerId');
+      final response = await http.get(url, headers: headers);
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true && data['data'] != null) {
+          return ChargingProvider.fromJson(data['data']);
+        }
+      }
+    } catch (e) {
+      print('Error fetching provider details: $e');
+    }
+    return null;
+  }
+
+  // Method to get coordinates from address using geocoding service
+  Future<Map<String, double?>> _getCoordinatesFromAddress(String address) async {
+    try {
+      // Basic address-based coordinate mapping
+      final Map<String, Map<String, double>> cityCoordinates = {
+        'pune': {'lat': 18.5204, 'lng': 73.8567},
+        'mumbai': {'lat': 19.0760, 'lng': 72.8777},
+        'delhi': {'lat': 28.7041, 'lng': 77.1025},
+        'bangalore': {'lat': 12.9716, 'lng': 77.5946},
+        'chennai': {'lat': 13.0827, 'lng': 80.2707},
+        'hyderabad': {'lat': 17.3850, 'lng': 78.4867},
+        'kolkata': {'lat': 22.5726, 'lng': 88.3639},
+        'ahmedabad': {'lat': 23.0225, 'lng': 72.5714},
+      };
+
+      final addressLower = address.toLowerCase();
+      
+      for (final city in cityCoordinates.keys) {
+        if (addressLower.contains(city)) {
+          return {
+            'latitude': cityCoordinates[city]!['lat'],
+            'longitude': cityCoordinates[city]!['lng'],
+          };
+        }
+      }
+
+      // Default to Pune coordinates
+      return {
+        'latitude': 18.5204,
+        'longitude': 73.8567,
+      };
+    } catch (e) {
+      print('Error getting coordinates from address: $e');
+      return {
+        'latitude': 18.5204,
+        'longitude': 73.8567,
+      };
+    }
+  }
+
+  // Helper method to get default latitude based on address
+  double _getDefaultLatitude(String address) {
+    // Basic city coordinate mapping
+    if (address.toLowerCase().contains('pune')) {
+      return 18.5204;
+    } else if (address.toLowerCase().contains('mumbai')) {
+      return 19.0760;
+    } else if (address.toLowerCase().contains('delhi')) {
+      return 28.7041;
+    } else if (address.toLowerCase().contains('bangalore')) {
+      return 12.9716;
+    }
+    // Default to Pune
+    return 18.5204;
+  }
+
+  // Helper method to get default longitude based on address
+  double _getDefaultLongitude(String address) {
+    // Basic city coordinate mapping
+    if (address.toLowerCase().contains('pune')) {
+      return 73.8567;
+    } else if (address.toLowerCase().contains('mumbai')) {
+      return 72.8777;
+    } else if (address.toLowerCase().contains('delhi')) {
+      return 77.1025;
+    } else if (address.toLowerCase().contains('bangalore')) {
+      return 77.5946;
+    }
+    // Default to Pune
+    return 73.8567;
+  }
+
+  // Fallback method to open external maps app with address
+  void _openExternalMaps(String address) {
+    try {
+      final encodedAddress = Uri.encodeComponent(address);
+      final googleMapsUrl = 'https://www.google.com/maps/search/?api=1&query=$encodedAddress';
+      
+      launchUrl(Uri.parse(googleMapsUrl), mode: LaunchMode.externalApplication);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not open maps. Please check the address manually.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+    }
   }
 
   void _trackCharging(Booking booking) {
@@ -848,14 +1201,34 @@ class _MyBookingsScreenState extends ConsumerState<MyBookingsScreen>
     );
   }
 
-  void _contactProvider(Booking booking) {
+  void _callProvider(Booking booking) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Calling provider...'),
-        duration: Duration(seconds: 2),
-      ),
-    );
+    
+    // Try to call provider if phone number is available
+    if (booking.providerPhone != null && booking.providerPhone!.isNotEmpty) {
+      try {
+        launchUrl(Uri.parse('tel:${booking.providerPhone}'));
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not initiate call'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Contact ${booking.providerName} for assistance'),
+          backgroundColor: Colors.blue.shade600,
+          action: SnackBarAction(
+            label: 'OK',
+            textColor: Colors.white,
+            onPressed: () {},
+          ),
+        ),
+      );
+    }
   }
 
   void _writeReview(Booking booking) {

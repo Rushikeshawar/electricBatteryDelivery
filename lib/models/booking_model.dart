@@ -16,6 +16,11 @@ class Booking {
   final DateTime createdAt;
   final DateTime updatedAt;
   final bool hasReview;
+  
+  // NEW FIELDS ADDED for coordinates and phone support
+  final double? providerLatitude;
+  final double? providerLongitude;
+  final String? providerPhone;
 
   Booking({
     required this.id,
@@ -35,6 +40,11 @@ class Booking {
     required this.createdAt,
     required this.updatedAt,
     required this.hasReview,
+    
+    // NEW PARAMETERS ADDED
+    this.providerLatitude,
+    this.providerLongitude,
+    this.providerPhone,
   });
 
   factory Booking.fromJson(Map<String, dynamic> json) {
@@ -56,6 +66,15 @@ class Booking {
       createdAt: DateTime.parse(json['createdAt'] ?? DateTime.now().toIso8601String()),
       updatedAt: DateTime.parse(json['updatedAt'] ?? DateTime.now().toIso8601String()),
       hasReview: json['hasReview'] ?? false,
+      
+      // NEW FIELD MAPPINGS ADDED
+      providerLatitude: json['providerLatitude']?.toDouble() ?? 
+                       json['provider']?['latitude']?.toDouble(),
+      providerLongitude: json['providerLongitude']?.toDouble() ?? 
+                        json['provider']?['longitude']?.toDouble(),
+      providerPhone: json['providerPhone']?.toString() ?? 
+                    json['provider']?['contactNumber']?.toString() ??
+                    json['provider']?['phone']?.toString(),
     );
   }
 
@@ -78,6 +97,11 @@ class Booking {
       'createdAt': createdAt.toIso8601String(),
       'updatedAt': updatedAt.toIso8601String(),
       'hasReview': hasReview,
+      
+      // NEW FIELD MAPPINGS ADDED
+      'providerLatitude': providerLatitude,
+      'providerLongitude': providerLongitude,
+      'providerPhone': providerPhone,
     };
   }
 
@@ -99,6 +123,11 @@ class Booking {
     DateTime? createdAt,
     DateTime? updatedAt,
     bool? hasReview,
+    
+    // NEW PARAMETERS ADDED
+    double? providerLatitude,
+    double? providerLongitude,
+    String? providerPhone,
   }) {
     return Booking(
       id: id ?? this.id,
@@ -118,7 +147,20 @@ class Booking {
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       hasReview: hasReview ?? this.hasReview,
+      
+      // NEW FIELDS ADDED
+      providerLatitude: providerLatitude ?? this.providerLatitude,
+      providerLongitude: providerLongitude ?? this.providerLongitude,
+      providerPhone: providerPhone ?? this.providerPhone,
     );
+  }
+
+  // NEW METHOD ADDED - Check if coordinates are available
+  bool get hasCoordinates {
+    return providerLatitude != null && 
+           providerLongitude != null &&
+           providerLatitude != 0.0 && 
+           providerLongitude != 0.0;
   }
 }
 

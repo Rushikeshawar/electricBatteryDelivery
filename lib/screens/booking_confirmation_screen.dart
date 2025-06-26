@@ -4,6 +4,7 @@ import 'package:electric_battery_delivery_frontend/components/app_theme.dart';
 import 'package:electric_battery_delivery_frontend/models/charging_provider_model.dart';
 import 'package:electric_battery_delivery_frontend/models/booking_model.dart';
 import 'package:electric_battery_delivery_frontend/screens/my_bookings_screen.dart';
+import 'package:electric_battery_delivery_frontend/screens/map_directions_screen.dart'; // Import the new map screen
 
 class BookingConfirmationScreen extends StatefulWidget {
   final Booking booking;
@@ -666,12 +667,16 @@ class _BookingConfirmationScreenState extends State<BookingConfirmationScreen>
     );
   }
 
+  // Updated _getDirections method to navigate to MapDirectionsScreen
   void _getDirections() {
-    // Implement navigation to maps app with provider location
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Opening directions in maps app...'),
-        duration: Duration(seconds: 2),
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => MapDirectionsScreen(
+          provider: widget.provider,
+          providerName: widget.provider.businessName,
+          providerAddress: widget.provider.address,
+        ),
       ),
     );
   }

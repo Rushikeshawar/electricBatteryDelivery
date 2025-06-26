@@ -24,6 +24,7 @@ class _WriteReviewScreenState extends ConsumerState<WriteReviewScreen> {
   int _rating = 0;
   final TextEditingController _commentController = TextEditingController();
   final List<String> _selectedTags = [];
+  bool _isCheckingExistingReview = true;
   
   final List<String> _positiveReviewTags = [
     'Clean facility',
@@ -48,14 +49,85 @@ class _WriteReviewScreenState extends ConsumerState<WriteReviewScreen> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    _checkExistingReview();
+  }
+
+  @override
   void dispose() {
     _commentController.dispose();
     super.dispose();
   }
 
+  Future<void> _checkExistingReview() async {
+    try {
+      final hasReviewed = await ref.read(reviewProvider.notifier).hasUserReviewedBooking(
+        providerId: widget.booking.providerId,
+        bookingId: widget.booking.id,
+      );
+
+      if (mounted) {
+        if (hasReviewed) {
+          _showAlreadyReviewedDialog();
+        } else {
+          setState(() {
+            _isCheckingExistingReview = false;
+          });
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isCheckingExistingReview = false;
+        });
+      }
+    }
+  }
+
+  void _showAlreadyReviewedDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Review Already Submitted'),
+        content: const Text('You have already submitted a review for this booking. You can only review each booking once.'),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop(); // Close dialog
+              Navigator.pop(context, false); // Go back to previous screen
+            },
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final reviewState = ref.watch(reviewProvider);
+    
+    if (_isCheckingExistingReview) {
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text('Write Review'),
+          backgroundColor: Colors.green.shade600,
+          foregroundColor: Colors.white,
+        ),
+        body: const Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 16),
+              Text('Checking review status...'),
+            ],
+          ),
+        ),
+      );
+    }
     
     return Scaffold(
       appBar: AppBar(
@@ -504,7 +576,7 @@ class _WriteReviewScreenState extends ConsumerState<WriteReviewScreen> {
         bookingId: widget.booking.id,
         rating: _rating,
         comment: _commentController.text.trim(),
-        tags: _selectedTags,
+        tags: _selectedTags, // Keep tags for potential future backend support
       );
       
       if (mounted) {
@@ -514,23 +586,62 @@ class _WriteReviewScreenState extends ConsumerState<WriteReviewScreen> {
             SnackBar(
               content: const Text('Thank you for your review!'),
               backgroundColor: Colors.green.shade600,
+              duration: const Duration(seconds: 3),
             ),
           );
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Failed to submit review. Please try again.'),
-              backgroundColor: Colors.red,
-            ),
-          );
+          // Get the specific error message from the provider
+          final reviewState = ref.read(reviewProvider);
+          final errorMessage = reviewState.errorMessage ?? 'Failed to submit review. Please try again.';
+          
+          // Handle duplicate review scenario
+          if (errorMessage.toLowerCase().contains('already exists') || 
+              errorMessage.toLowerCase().contains('duplicate') ||
+              errorMessage.toLowerCase().contains('conflict')) {
+            showDialog(
+              context: context,
+              builder: (context) => AlertDialog(
+                title: const Text('Review Already Submitted'),
+                content: const Text('You have already submitted a review for this booking. You can only review each booking once.'),
+                actions: [
+                  TextButton(
+                    onPressed: () {
+                      Navigator.of(context).pop(); // Close dialog
+                      Navigator.pop(context, false); // Go back to previous screen
+                    },
+                    child: const Text('OK'),
+                  ),
+                ],
+              ),
+            );
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(errorMessage),
+                backgroundColor: Colors.red,
+                duration: const Duration(seconds: 4),
+                action: SnackBarAction(
+                  label: 'Retry',
+                  textColor: Colors.white,
+                  onPressed: _submitReview,
+                ),
+              ),
+            );
+          }
         }
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error: ${e.toString()}'),
+            content: Text('Unexpected error: ${e.toString()}'),
             backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
+            action: SnackBarAction(
+              label: 'Retry',
+              textColor: Colors.white,
+              onPressed: _submitReview,
+            ),
           ),
         );
       }

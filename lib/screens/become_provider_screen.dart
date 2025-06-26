@@ -1,6 +1,7 @@
-// lib/screens/become_provider_screen.dart - Enhanced with better request handling
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import '../models/provider_models.dart';
 import '../providers/provider_providers.dart';
 import '../components/app_theme.dart';
@@ -16,7 +17,15 @@ class BecomeProviderScreen extends ConsumerStatefulWidget {
 class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
   final _formKey = GlobalKey<FormState>();
   final _businessNameController = TextEditingController();
+
+  // Separate address controllers
+  final _streetAddressController = TextEditingController();
+  final _cityController = TextEditingController();
+  final _stateController = TextEditingController();
+  final _villageController = TextEditingController();
+  final _pincodeController = TextEditingController();
   final _addressController = TextEditingController();
+
   final _hourlyRateController = TextEditingController();
   final _descriptionController = TextEditingController();
   final _contactController = TextEditingController();
@@ -26,6 +35,8 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
   String _selectedChargerType = 'Type 2 AC';
   List<String> _selectedVehicleTypes = [];
   List<String> _selectedAmenities = [];
+
+  static const String _googleMapsApiKey = 'AIzaSyBr_r8bq7m1A5aIh9-rkEIUB7chNfbwimM';
 
   final List<String> _chargerTypes = [
     'Type 2 AC',
@@ -57,13 +68,13 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
   bool _hasCheckedExistingRequest = false;
 
   @override
-  void initState() {
-    super.initState();
-  }
-
-  @override
   void dispose() {
     _businessNameController.dispose();
+    _streetAddressController.dispose();
+    _cityController.dispose();
+    _stateController.dispose();
+    _villageController.dispose();
+    _pincodeController.dispose();
     _addressController.dispose();
     _hourlyRateController.dispose();
     _descriptionController.dispose();
@@ -71,6 +82,86 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
     _latitudeController.dispose();
     _longitudeController.dispose();
     super.dispose();
+  }
+
+  Future<void> geocodeAddress(String address) async {
+    if (address.isEmpty) return;
+
+    try {
+      final url = Uri.parse(
+        'https://maps.googleapis.com/maps/api/geocode/json?address=${Uri.encodeComponent(address)}&key=$_googleMapsApiKey'
+      );
+
+      final response = await http.get(url);
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+
+        if (data['status'] == 'OK' && data['results'].isNotEmpty) {
+          final location = data['results'][0]['geometry']['location'];
+          final lat = location['lat'];
+          final lng = location['lng'];
+
+          _latitudeController.text = lat.toString();
+          _longitudeController.text = lng.toString();
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Coordinates updated successfully!'),
+              backgroundColor: Colors.green,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Address not found. Please check the address.'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error getting coordinates: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  String _buildFullAddress() {
+    List<String> addressParts = [];
+
+    if (_streetAddressController.text.isNotEmpty) {
+      addressParts.add(_streetAddressController.text);
+    }
+    if (_villageController.text.isNotEmpty) {
+      addressParts.add(_villageController.text);
+    }
+    if (_cityController.text.isNotEmpty) {
+      addressParts.add(_cityController.text);
+    }
+    if (_stateController.text.isNotEmpty) {
+      addressParts.add(_stateController.text);
+    }
+    if (_pincodeController.text.isNotEmpty) {
+      addressParts.add(_pincodeController.text);
+    }
+
+    return addressParts.join(', ');
+  }
+
+  void _updateFullAddress() {
+    final fullAddress = _buildFullAddress();
+    _addressController.text = fullAddress;
+
+    Future.delayed(const Duration(seconds: 3), () {
+      if (_addressController.text == fullAddress && fullAddress.isNotEmpty) {
+        geocodeAddress(fullAddress);
+      }
+    });
   }
 
   @override
@@ -91,7 +182,6 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (error, stack) => _buildForm(registrationState),
         data: (requestStatus) {
-          // Check if user has an existing request
           if (requestStatus != null && !_hasCheckedExistingRequest) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               _showExistingRequestDialog(requestStatus);
@@ -99,12 +189,10 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
             });
           }
 
-          // If user has an existing request, show different UI
           if (requestStatus != null) {
             return _buildExistingRequestView(requestStatus);
           }
 
-          // Otherwise show the form
           return _buildForm(registrationState);
         },
       ),
@@ -116,7 +204,6 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
       padding: const EdgeInsets.all(16),
       child: Column(
         children: [
-          // Status Card
           Card(
             color: _getStatusColor(status.status).withOpacity(0.1),
             child: Padding(
@@ -175,7 +262,6 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
 
           const SizedBox(height: 20),
 
-          // Status-specific content
           if (status.status == 'PENDING') ...[
             _buildPendingStatusCard(),
             const SizedBox(height: 16),
@@ -192,7 +278,6 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
 
           const SizedBox(height: 20),
 
-          // Navigation buttons
           Row(
             children: [
               Expanded(
@@ -366,7 +451,6 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
 
     return Column(
       children: [
-        // Update Request Button (only for pending requests)
         if (status.status == 'PENDING') ...[
           SizedBox(
             width: double.infinity,
@@ -384,12 +468,11 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
           const SizedBox(height: 12),
         ],
 
-        // Cancel Request Button
         SizedBox(
           width: double.infinity,
           child: OutlinedButton.icon(
             onPressed: registrationState.isLoading ? null : () => _showCancelRequestDialog(),
-            icon: registrationState.isLoading 
+            icon: registrationState.isLoading
                 ? const SizedBox(
                     width: 16,
                     height: 16,
@@ -415,7 +498,6 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
           width: double.infinity,
           child: ElevatedButton.icon(
             onPressed: () {
-              // Navigate to provider dashboard
               Navigator.pushReplacementNamed(context, '/provider-dashboard');
             },
             icon: const Icon(Icons.dashboard),
@@ -432,7 +514,6 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
           width: double.infinity,
           child: OutlinedButton.icon(
             onPressed: () {
-              // Navigate to manage profile
               Navigator.pushNamed(context, '/provider-profile');
             },
             icon: const Icon(Icons.person),
@@ -490,7 +571,6 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -522,10 +602,9 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
                 ),
               ),
             ),
-            
+
             const SizedBox(height: 16),
 
-            // Business Information Section
             _buildSectionHeader('Business Information'),
             Card(
               child: Padding(
@@ -562,7 +641,6 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
 
             const SizedBox(height: 16),
 
-            // Charging Equipment Section
             _buildSectionHeader('Charging Equipment'),
             Card(
               child: Padding(
@@ -634,88 +712,11 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
 
             const SizedBox(height: 16),
 
-            // Location Section
             _buildSectionHeader('Location'),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  children: [
-                    TextFormField(
-                      controller: _addressController,
-                      decoration: const InputDecoration(
-                        labelText: 'Address *',
-                        hintText: 'Enter your charging station address',
-                        prefixIcon: Icon(Icons.location_on),
-                      ),
-                      maxLines: 2,
-                      validator: (value) {
-                        if (value == null || value.isEmpty) {
-                          return 'Please enter the address';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextFormField(
-                            controller: _latitudeController,
-                            decoration: const InputDecoration(
-                              labelText: 'Latitude *',
-                              hintText: '12.9716',
-                              prefixIcon: Icon(Icons.my_location),
-                            ),
-                            keyboardType: TextInputType.number,
-                            validator: (value) {
-                              if (value == null || value.isEmpty) {
-                                return 'Required';
-                              }
-                              if (double.tryParse(value) == null) {
-                                return 'Invalid';
-                              }
-                              return null;
-                            },
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: TextFormField(
-                            controller: _longitudeController,
-                            decoration: const InputDecoration(
-                              labelText: 'Longitude *',
-                              hintText: '77.5946',
-                              prefixIcon: Icon(Icons.my_location),
-                            ),
-                            keyboardType: TextInputType.number,
-                            validator: (value) {
-                              if (value == null || value.isEmpty) {
-                                return 'Required';
-                              }
-                              if (double.tryParse(value) == null) {
-                                return 'Invalid';
-                              }
-                              return null;
-                            },
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    TextButton.icon(
-                      onPressed: _getCurrentLocation,
-                      icon: const Icon(Icons.gps_fixed),
-                      label: const Text('Use Current Location'),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+            _buildAddressSection(),
 
             const SizedBox(height: 16),
 
-            // Pricing & Description Section
             _buildSectionHeader('Pricing & Description'),
             Card(
               child: Padding(
@@ -763,7 +764,6 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
 
             const SizedBox(height: 16),
 
-            // Amenities Section
             _buildSectionHeader('Amenities (Optional)'),
             Card(
               child: Padding(
@@ -803,7 +803,6 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
 
             const SizedBox(height: 24),
 
-            // Submit Button
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
@@ -834,7 +833,6 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
 
             const SizedBox(height: 16),
 
-            // Terms and Conditions
             Card(
               color: Colors.blue.shade50,
               child: Padding(
@@ -881,6 +879,278 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
     );
   }
 
+  Widget _buildAddressSection() {
+    return Column(
+      children: [
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Charging Station Address Details',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    color: Colors.blue.shade700,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                TextFormField(
+                  controller: _streetAddressController,
+                  decoration: const InputDecoration(
+                    labelText: 'Street Address / Building Name *',
+                    hintText: 'e.g., 123 Main Street, ABC Building',
+                    prefixIcon: Icon(Icons.home),
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Please enter street address';
+                    }
+                    if (value.length < 2) {
+                      return 'Please enter a valid address';
+                    }
+                    return null;
+                  },
+                  onChanged: (value) => _updateFullAddress(),
+                ),
+                const SizedBox(height: 12),
+
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _cityController,
+                        decoration: const InputDecoration(
+                          labelText: 'City *',
+                          prefixIcon: Icon(Icons.location_city),
+                          border: OutlineInputBorder(),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Please enter city';
+                          }
+                          return null;
+                        },
+                        onChanged: (value) => _updateFullAddress(),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _stateController,
+                        decoration: const InputDecoration(
+                          labelText: 'State *',
+                          prefixIcon: Icon(Icons.map),
+                          border: OutlineInputBorder(),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Please enter state';
+                          }
+                          return null;
+                        },
+                        onChanged: (value) => _updateFullAddress(),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _villageController,
+                        decoration: const InputDecoration(
+                          labelText: 'Village / Area *',
+                          prefixIcon: Icon(Icons.landscape),
+                          border: OutlineInputBorder(),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Please enter area';
+                          }
+                          return null;
+                        },
+                        onChanged: (value) => _updateFullAddress(),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _pincodeController,
+                        decoration: const InputDecoration(
+                          labelText: 'Pincode *',
+                          prefixIcon: Icon(Icons.pin_drop),
+                          border: OutlineInputBorder(),
+                        ),
+                        keyboardType: TextInputType.number,
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Please enter pincode';
+                          }
+                          if (value.length != 6) {
+                            return 'Pincode should be 6 digits';
+                          }
+                          if (int.tryParse(value) == null) {
+                            return 'Enter a valid pincode';
+                          }
+                          return null;
+                        },
+                        onChanged: (value) => _updateFullAddress(),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade100,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.grey.shade300),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Full Address Preview:',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey.shade700,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _buildFullAddress().isEmpty
+                          ? 'Address will appear here as you type...'
+                          : _buildFullAddress(),
+                        style: TextStyle(
+                          color: Colors.grey.shade800,
+                          fontStyle: _buildFullAddress().isEmpty
+                            ? FontStyle.italic
+                            : FontStyle.normal,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        const SizedBox(height: 16),
+
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Coordinates',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    color: Colors.green.shade700,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _latitudeController,
+                        decoration: const InputDecoration(
+                          labelText: 'Latitude *',
+                          hintText: '12.9716',
+                          prefixIcon: Icon(Icons.my_location),
+                          border: OutlineInputBorder(),
+                        ),
+                        keyboardType: TextInputType.number,
+                        readOnly: true,
+                        style: TextStyle(color: Colors.grey.shade700),
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Required';
+                          }
+                          if (double.tryParse(value) == null) {
+                            return 'Invalid';
+                          }
+                          return null;
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _longitudeController,
+                        decoration: const InputDecoration(
+                          labelText: 'Longitude *',
+                          hintText: '77.5946',
+                          prefixIcon: Icon(Icons.my_location),
+                          border: OutlineInputBorder(),
+                        ),
+                        keyboardType: TextInputType.number,
+                        readOnly: true,
+                        style: TextStyle(color: Colors.grey.shade700),
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Required';
+                          }
+                          if (double.tryParse(value) == null) {
+                            return 'Invalid';
+                          }
+                          return null;
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+
+                Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          final fullAddress = _buildFullAddress();
+                          if (fullAddress.isNotEmpty) {
+                            geocodeAddress(fullAddress);
+                          }
+                        },
+                        icon: const Icon(Icons.gps_fixed),
+                        label: const Text('Get Coordinates'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.blue.shade600,
+                          foregroundColor: Colors.white,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _getCurrentLocation,
+                        icon: const Icon(Icons.my_location),
+                        label: const Text('Use Current Location'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildSectionHeader(String title) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
@@ -922,7 +1192,6 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
   }
 
   void _getCurrentLocation() {
-    // TODO: Implement location fetching using geolocator package
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('Location feature will be implemented with geolocator package'),
@@ -967,14 +1236,13 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
           backgroundColor: Colors.green,
         ),
       );
-      // Refresh the request status
       ref.invalidate(providerRequestStatusProvider);
       Navigator.pop(context);
     } else if (mounted) {
       final state = ref.read(providerRegistrationProvider);
       state.whenOrNull(
         error: (error, stack) {
-          if (error.toString().contains('already have a provider request') || 
+          if (error.toString().contains('already have a provider request') ||
               error.toString().contains('409') ||
               error.toString().contains('Conflict')) {
             _showConflictDialog();
@@ -992,14 +1260,17 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
   }
 
   void _submitNewRequest() async {
-    // First cancel the existing rejected request
     final cancelSuccess = await ref.read(providerRegistrationProvider.notifier).cancelProviderRequest();
-    
+
     if (cancelSuccess) {
-      // Reset the form and show it
       setState(() {
         _hasCheckedExistingRequest = false;
         _businessNameController.clear();
+        _streetAddressController.clear();
+        _cityController.clear();
+        _stateController.clear();
+        _villageController.clear();
+        _pincodeController.clear();
         _addressController.clear();
         _hourlyRateController.clear();
         _descriptionController.clear();
@@ -1010,10 +1281,9 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
         _selectedVehicleTypes.clear();
         _selectedAmenities.clear();
       });
-      
-      // Refresh the request status
+
       ref.invalidate(providerRequestStatusProvider);
-      
+
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Previous request removed. You can now submit a new request.'),
@@ -1056,12 +1326,12 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
             const SizedBox(height: 8),
             Text('Submitted on: ${_formatDate(status.createdAt)}'),
             const SizedBox(height: 8),
-            if (status.status == 'PENDING') 
+            if (status.status == 'PENDING')
               Text(
                 'Your request is currently under review. You can check the status or make updates if needed.',
                 style: TextStyle(color: Colors.grey.shade600),
               )
-            else if (status.status == 'REJECTED') 
+            else if (status.status == 'REJECTED')
               Text(
                 'Your previous request was rejected. You can submit a new request after removing the old one.',
                 style: TextStyle(color: Colors.red.shade600),
@@ -1084,7 +1354,6 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
           ElevatedButton(
             onPressed: () {
               Navigator.pop(context);
-              // The existing request view will be shown automatically
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.blue.shade600,
@@ -1139,7 +1408,6 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
           ElevatedButton(
             onPressed: () {
               Navigator.pop(context);
-              // Refresh the provider request status
               ref.invalidate(providerRequestStatusProvider);
             },
             style: ElevatedButton.styleFrom(
@@ -1197,21 +1465,21 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
           ElevatedButton(
             onPressed: () async {
               final updates = <String, dynamic>{};
-              
+
               if (hourlyRateController.text.isNotEmpty) {
                 final rate = double.tryParse(hourlyRateController.text);
                 if (rate != null) updates['hourlyRate'] = rate;
               }
-              
+
               if (descriptionController.text.isNotEmpty) {
                 updates['description'] = descriptionController.text;
               }
 
               if (updates.isNotEmpty) {
                 final success = await ref.read(providerRegistrationProvider.notifier).updateProviderRequest(updates);
-                
+
                 Navigator.pop(context);
-                
+
                 if (success) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
@@ -1265,9 +1533,9 @@ class _BecomeProviderScreenState extends ConsumerState<BecomeProviderScreen> {
           ElevatedButton(
             onPressed: () async {
               Navigator.pop(context);
-              
+
               final success = await ref.read(providerRegistrationProvider.notifier).cancelProviderRequest();
-              
+
               if (success && mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
