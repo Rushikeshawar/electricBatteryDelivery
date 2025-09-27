@@ -107,7 +107,7 @@ class ApiConfig {
     final url = dotenv.env['API_BASE_URL'];
     if (url == null || url.isEmpty) {
       // Fallback to localhost if env variable is not set
-      return 'http://localhost:3000/api'; 
+      return 'https://mortgages-medication-consultation-helmet.trycloudflare.com/api'; 
     }
     return url;
   }
