@@ -1,4 +1,4 @@
-// main.dart - Cleaned version keeping login->homescreen flow intact
+// main.dart - Updated with payment screen integration
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,9 +7,12 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 // Core screens (keep existing)
 import 'package:electric_battery_delivery_frontend/OrderOtpScreen.dart';
 import 'package:electric_battery_delivery_frontend/components/app_theme.dart';
-import 'package:electric_battery_delivery_frontend/homescreen.dart'; // Keep this
-import 'package:electric_battery_delivery_frontend/login_screen.dart'; // Keep this
+import 'package:electric_battery_delivery_frontend/homescreen.dart';
+import 'package:electric_battery_delivery_frontend/login_screen.dart';
 import 'package:electric_battery_delivery_frontend/notification_screen.dart';
+
+// Add payment screen import
+import 'package:electric_battery_delivery_frontend/payment_screen.dart';
 
 // Services (keep existing)
 import 'package:electric_battery_delivery_frontend/services/socket_notification_service.dart';
@@ -17,6 +20,9 @@ import 'package:electric_battery_delivery_frontend/services/auth_service.dart';
 import 'package:electric_battery_delivery_frontend/services/websocket_location_service.dart';
 import 'package:electric_battery_delivery_frontend/services/websocket_notification_service.dart';
 import 'package:electric_battery_delivery_frontend/providers/notification_provider.dart';
+
+// Add payment provider import
+import 'package:electric_battery_delivery_frontend/providers/payment_provider.dart';
 
 // PowerPoint Customer functionality (consolidated)
 import 'package:electric_battery_delivery_frontend/screens/charging_providers_screen.dart';
@@ -65,11 +71,13 @@ void main() async {
   try {
     // Load environment variables
     await dotenv.load(fileName: ".env");
-    print('✅ Environment variables loaded successfully');
-    print('📍 Google Maps API Key: ${dotenv.env['GOOGLE_MAPS_API_KEY']?.substring(0, 10)}...');
+    print('Environment variables loaded successfully');
+    print('Google Maps API Key: ${dotenv.env['GOOGLE_MAPS_API_KEY']?.substring(0, 10)}...');
+    print('API Base URL: ${dotenv.env['API_BASE_URL']}');
+    print('Razorpay Key ID: ${dotenv.env['RAZORPAY_KEY_ID']?.substring(0, 10)}...');
   } catch (e) {
-    print('⚠️ Error loading .env file: $e');
-    print('🔄 Continuing with fallback configuration...');
+    print('Error loading .env file: $e');
+    print('Continuing with fallback configuration...');
   }
   
   // Initialize local notifications (only for mobile)
@@ -90,9 +98,9 @@ void main() async {
 // Wait for Google Maps API to load on web
 Future<void> _waitForGoogleMapsOnWeb() async {
   if (kIsWeb) {
-    print('🌐 Waiting for Google Maps API to load on web...');
+    print('Waiting for Google Maps API to load on web...');
     await Future.delayed(const Duration(seconds: 3));
-    print('✅ Google Maps API should be loaded');
+    print('Google Maps API should be loaded');
   }
 }
 
@@ -120,12 +128,12 @@ Future<void> _initializeLocalNotifications() async {
     await flutterLocalNotificationsPlugin.initialize(
       initializationSettings,
       onDidReceiveNotificationResponse: (NotificationResponse response) {
-        debugPrint('📱 Notification tapped: ${response.payload}');
+        debugPrint('Notification tapped: ${response.payload}');
       },
     );
-    print('✅ Local notifications initialized successfully');
+    print('Local notifications initialized successfully');
   } catch (e) {
-    print('❌ Error initializing local notifications: $e');
+    print('Error initializing local notifications: $e');
   }
 }
 
@@ -164,9 +172,9 @@ class _BatteryWalaAppState extends ConsumerState<BatteryWalaApp> {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             notificationService.setupNotificationHandling(context);
           });
-          print('✅ Socket notification service initialized');
+          print('Socket notification service initialized');
         } catch (e) {
-          print('❌ Error initializing socket notification service: $e');
+          print('Error initializing socket notification service: $e');
         }
       });
     }
@@ -194,6 +202,16 @@ class _BatteryWalaAppState extends ConsumerState<BatteryWalaApp> {
       '/order-otp': (context) {
         final args = ModalRoute.of(context)!.settings.arguments as Map<String, dynamic>;
         return OrderOtpScreen(orderId: args['orderId']);
+      },
+      
+      // === PAYMENT ROUTE (NEW) ===
+      '/payment': (context) {
+        final args = ModalRoute.of(context)!.settings.arguments as Map<String, dynamic>;
+        return PaymentScreen(
+          station: args['station'],
+          battery: args['battery'],
+          booking: args['booking'],
+        );
       },
       
       // === CHARGING STATIONS (PowerPoint) ===
@@ -407,12 +425,13 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
     // Initialize notification services
     try {
       await Future.delayed(const Duration(milliseconds: 200));
-      print('✅ SPLASH: Enhanced notification services initialized');
-      print('⚡ SPLASH: PowerPoint provider functionality ready');
-      print('🏢 SPLASH: Service provider functionality ready');
-      print('🚀 SPLASH: App ready to launch');
+      print('SPLASH: Enhanced notification services initialized');
+      print('SPLASH: PowerPoint provider functionality ready');
+      print('SPLASH: Service provider functionality ready');
+      print('SPLASH: Payment integration ready');
+      print('SPLASH: App ready to launch');
     } catch (e) {
-      print('❌ SPLASH: Error initializing notification services: $e');
+      print('SPLASH: Error initializing notification services: $e');
     }
     
     if (mounted) {
@@ -548,13 +567,13 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Icon(
-                                Icons.ev_station,
+                                Icons.payment,
                                 color: Colors.white,
                                 size: 16,
                               ),
                               const SizedBox(width: 6),
                               Text(
-                                'PowerPoint Charging Network',
+                                'Razorpay Payment Integration',
                                 style: TextStyle(
                                   color: Colors.white,
                                   fontSize: 14,
@@ -622,8 +641,8 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
                               const SizedBox(height: 16),
                               Text(
                                 kIsWeb 
-                                    ? '🌐 Loading PowerPoint services...' 
-                                    : '⚡ Initializing your experience...',
+                                    ? 'Loading payment services...' 
+                                    : 'Initializing payment gateway...',
                                 style: TextStyle(
                                   color: Colors.white.withOpacity(0.8),
                                   fontSize: 14,

@@ -14,11 +14,10 @@
         android:label="BatteryWala"
         android:icon="@mipmap/ic_launcher">
 
-        <!-- Google Maps API Key (Use the one you currently prefer) -->
+        <!-- Google Maps API Key -->
         <meta-data
             android:name="com.google.android.geo.API_KEY"
             android:value="AIzaSyBr_r8bq7m1A5aIh9-rkEIUB7chNfbwimM" />
-        <!-- OR replace with: AIzaSyBr_r8bq7m1A5aIh9-rkEIUB7chNfbwimM -->
 
         <activity
             android:name=".MainActivity"

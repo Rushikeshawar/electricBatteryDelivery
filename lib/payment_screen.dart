@@ -1,12 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:electric_battery_delivery_frontend/components/models.dart';
 import 'package:electric_battery_delivery_frontend/location_map_screen1.dart';
-import '../providers/payment_provider.dart';
+import 'package:electric_battery_delivery_frontend/providers/payment_provider.dart';
 
-class PaymentScreen extends ConsumerWidget {
+class PaymentScreen extends ConsumerStatefulWidget {
   final Station station;
   final Battery battery;
   final BatteryBooking booking;
@@ -19,52 +18,68 @@ class PaymentScreen extends ConsumerWidget {
   }) : super(key: key);
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<PaymentScreen> createState() => _PaymentScreenState();
+}
+
+class _PaymentScreenState extends ConsumerState<PaymentScreen> {
+  @override
+  void initState() {
+    super.initState();
+    
+    // Add debugging
+    print('PAYMENT SCREEN: Initialized with station: ${widget.station.name}');
+    print('PAYMENT SCREEN: Battery: ${widget.battery.type}');
+    print('PAYMENT SCREEN: Booking quantity: ${widget.booking.quantity}');
+    
+    // Fetch pricing when screen loads
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _fetchPricing();
+    });
+  }
+
+  void _fetchPricing() {
+    print('PAYMENT SCREEN: Fetching pricing for product ${widget.battery.id}');
+    ref.read(paymentProvider.notifier).fetchPricing(
+      productId: widget.battery.id,
+      quantity: widget.booking.quantity,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final paymentState = ref.watch(paymentProvider);
     final paymentNotifier = ref.read(paymentProvider.notifier);
-
-    final _formKey = GlobalKey<FormState>();
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Payment'),
         backgroundColor: Colors.green.shade600,
         foregroundColor: Colors.white,
+        elevation: 0,
       ),
       body: paymentState.isProcessing
-          ? _buildProcessingView()
-          : Form(
-              key: _formKey,
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _buildOrderSummary(station, battery, booking),
-                    const SizedBox(height: 24),
-                    _buildLocationOptionWithMap(paymentState, paymentNotifier, context),
-                    const SizedBox(height: 24),
-                    _buildPaymentForm(paymentState, paymentNotifier),
-                    const SizedBox(height: 32),
-                    if (paymentState.errorMessage != null)
-                      _buildErrorMessage(paymentState.errorMessage!),
-                    _buildPaymentButton(
-                      paymentState, 
-                      paymentNotifier, 
-                      _formKey, 
-                      station, 
-                      battery,
-                      booking, 
-                      context
-                    ),
-                  ],
-                ),
+          ? _buildProcessingView(paymentState)
+          : SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildOrderSummary(paymentState),
+                  const SizedBox(height: 24),
+                  _buildLocationOptionWithMap(paymentState, paymentNotifier, context),
+                  const SizedBox(height: 24),
+                  _buildPaymentMethodSelection(paymentState, paymentNotifier),
+                  const SizedBox(height: 32),
+                  if (paymentState.errorMessage != null)
+                    _buildErrorMessage(paymentState.errorMessage!),
+                  _buildPaymentButton(paymentState, paymentNotifier, context),
+                ],
               ),
             ),
     );
   }
 
-  Widget _buildProcessingView() {
+  Widget _buildProcessingView(PaymentState paymentState) {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -73,21 +88,38 @@ class PaymentScreen extends ConsumerWidget {
             valueColor: AlwaysStoppedAnimation<Color>(Colors.green.shade600),
           ),
           const SizedBox(height: 24),
-          const Text(
-            'Processing Payment...',
-            style: TextStyle(
+          Text(
+            paymentState.selectedPaymentMethod == 'razorpay' 
+                ? 'Processing Payment...'
+                : 'Creating Order...',
+            style: const TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.w500,
             ),
           ),
           const SizedBox(height: 8),
           Text(
-            'Please do not close this screen',
+            paymentState.selectedPaymentMethod == 'razorpay'
+                ? 'Please complete the payment in the popup'
+                : 'Please wait while we process your order',
             style: TextStyle(
               color: Colors.grey.shade600,
               fontSize: 14,
             ),
+            textAlign: TextAlign.center,
           ),
+          if (paymentState.selectedPaymentMethod == 'razorpay') ...[
+            const SizedBox(height: 16),
+            Text(
+              'Do not close this screen or go back',
+              style: TextStyle(
+                color: Colors.orange.shade700,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
         ],
       ),
     );
@@ -111,6 +143,15 @@ class PaymentScreen extends ConsumerWidget {
               message,
               style: TextStyle(color: Colors.red.shade700),
             ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close),
+            onPressed: () {
+              ref.read(paymentProvider.notifier).clearError();
+            },
+            color: Colors.red.shade700,
+            constraints: const BoxConstraints(),
+            padding: EdgeInsets.zero,
           ),
         ],
       ),
@@ -155,7 +196,6 @@ class PaymentScreen extends ConsumerWidget {
               activeColor: Colors.green.shade600,
               onChanged: (value) async {
                 if (value) {
-                  // Show loading while getting location
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
                       content: Row(
@@ -176,7 +216,6 @@ class PaymentScreen extends ConsumerWidget {
                   await paymentNotifier.getCurrentLocation();
                   
                   if (paymentState.currentPosition != null) {
-                    // Set current location as selected location
                     paymentNotifier.setSelectedLocation(
                       LatLng(
                         paymentState.currentPosition!.latitude,
@@ -216,7 +255,6 @@ class PaymentScreen extends ConsumerWidget {
                         initialAddress: paymentState.selectedAddress,
                         onLocationSelected: (location, address) {
                           paymentNotifier.setSelectedLocation(location, address);
-                          // If user selects from map, disable current location toggle
                           paymentNotifier.setUseCurrentLocation(false);
                           
                           ScaffoldMessenger.of(context).showSnackBar(
@@ -295,7 +333,6 @@ class PaymentScreen extends ConsumerWidget {
                 ),
               ),
             ] else ...[
-              // Warning when no location is selected
               const SizedBox(height: 12),
               Container(
                 padding: const EdgeInsets.all(12),
@@ -323,38 +360,146 @@ class PaymentScreen extends ConsumerWidget {
                 ),
               ),
             ],
-            
-            // Fallback address display
-            if (!paymentState.useCurrentLocation && paymentState.selectedLocation == null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8.0),
-                child: Text(
-                  'Default Address: ${booking.deliveryAddress}',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Colors.grey.shade700,
-                  ),
-                ),
-              ),
           ],
         ),
       ),
     );
   }
 
-  // Validation function for location
-  bool _validateLocation(PaymentState paymentState) {
-    return paymentState.useCurrentLocation && paymentState.currentPosition != null ||
-           paymentState.selectedLocation != null;
+  Widget _buildPaymentMethodSelection(PaymentState paymentState, PaymentNotifier paymentNotifier) {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Payment Method',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: Colors.green.shade700,
+              ),
+            ),
+            const SizedBox(height: 16),
+            
+            // Razorpay option
+            RadioListTile<String>(
+              title: Row(
+                children: [
+                  Icon(Icons.payment, color: Colors.blue.shade600),
+                  const SizedBox(width: 8),
+                  const Text('Online Payment'),
+                ],
+              ),
+              subtitle: const Text('Pay securely with UPI, Cards, Net Banking & Wallets'),
+              value: 'razorpay',
+              groupValue: paymentState.selectedPaymentMethod,
+              activeColor: Colors.green.shade600,
+              onChanged: (value) {
+                if (value != null) {
+                  paymentNotifier.setSelectedPaymentMethod(value);
+                }
+              },
+              contentPadding: EdgeInsets.zero,
+            ),
+            
+            const Divider(),
+            
+            // COD option
+            RadioListTile<String>(
+              title: Row(
+                children: [
+                  Icon(Icons.money, color: Colors.green.shade600),
+                  const SizedBox(width: 8),
+                  const Text('Cash on Delivery'),
+                ],
+              ),
+              subtitle: const Text('Pay with cash when your order is delivered'),
+              value: 'cod',
+              groupValue: paymentState.selectedPaymentMethod,
+              activeColor: Colors.green.shade600,
+              onChanged: (value) {
+                if (value != null) {
+                  paymentNotifier.setSelectedPaymentMethod(value);
+                }
+              },
+              contentPadding: EdgeInsets.zero,
+            ),
+            
+            if (paymentState.selectedPaymentMethod == 'razorpay') ...[
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue.shade200),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.security, color: Colors.blue.shade600, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Secure payment powered by Razorpay. All transactions are encrypted and protected.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.blue.shade800,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 
-  Widget _buildOrderSummary(Station station, Battery battery, BatteryBooking booking) {
-    const deliveryFee = 50.0;
-    const taxRate = 0.18;
+  Widget _buildOrderSummary(PaymentState paymentState) {
+    // Use pricing from backend if available, otherwise show loading
+    if (paymentState.pricingData == null) {
+      return Card(
+        elevation: 2,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Order Summary',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.green.shade700,
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Center(
+                child: CircularProgressIndicator(),
+              ),
+              const SizedBox(height: 16),
+              const Center(
+                child: Text('Loading pricing information...'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
 
-    final subtotal = booking.totalPrice;
-    final tax = subtotal * taxRate;
-    final total = subtotal + tax + deliveryFee;
+    final pricing = paymentState.pricingData!['pricing'];
+    final product = paymentState.pricingData!['product'];
 
     return Card(
       elevation: 2,
@@ -376,20 +521,22 @@ class PaymentScreen extends ConsumerWidget {
             ),
             const Divider(),
             const SizedBox(height: 8),
-            _buildInfoRow('Station', station.name),
+            _buildInfoRow('Station', widget.station.name),
             const SizedBox(height: 8),
-            _buildInfoRow('Battery', battery.type),
+            _buildInfoRow('Battery', product['batteryType']),
             const SizedBox(height: 8),
-            _buildInfoRow('Quantity', '${booking.quantity}'),
+            _buildInfoRow('Price per unit', '₹${product['price'].toStringAsFixed(2)}'),
             const SizedBox(height: 8),
-            _buildInfoRow('Delivery To', booking.deliveryAddress),
+            _buildInfoRow('Quantity', '${widget.booking.quantity}'),
+            const SizedBox(height: 8),
+            _buildInfoRow('Delivery To', widget.booking.deliveryAddress),
             const Divider(),
             const SizedBox(height: 8),
-            _buildInfoRow('Subtotal', '₹${subtotal.toStringAsFixed(2)}'),
+            _buildInfoRow('Subtotal', '₹${pricing['subtotal'].toStringAsFixed(2)}'),
             const SizedBox(height: 4),
-            _buildInfoRow('Delivery Fee', '₹${deliveryFee.toStringAsFixed(2)}'),
+            _buildInfoRow('Delivery Fee', '₹${pricing['deliveryFee'].toStringAsFixed(2)}'),
             const SizedBox(height: 4),
-            _buildInfoRow('Tax (18% GST)', '₹${tax.toStringAsFixed(2)}'),
+            _buildInfoRow('Tax (18% GST)', '₹${pricing['tax'].toStringAsFixed(2)}'),
             const Divider(),
             const SizedBox(height: 8),
             Row(
@@ -403,7 +550,7 @@ class PaymentScreen extends ConsumerWidget {
                   ),
                 ),
                 Text(
-                  '₹${total.toStringAsFixed(2)}',
+                  '₹${pricing['total'].toStringAsFixed(2)}',
                   style: TextStyle(
                     fontWeight: FontWeight.bold,
                     fontSize: 18,
@@ -443,185 +590,49 @@ class PaymentScreen extends ConsumerWidget {
     );
   }
 
-  Widget _buildPaymentForm(PaymentState paymentState, PaymentNotifier paymentNotifier) {
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Card Details',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: Colors.green.shade700,
-              ),
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: paymentState.cardNumberController,
-              decoration: InputDecoration(
-                labelText: 'Card Number',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                prefixIcon: const Icon(Icons.credit_card),
-                hintText: 'XXXX XXXX XXXX XXXX',
-              ),
-              keyboardType: TextInputType.number,
-              inputFormatters: [
-                FilteringTextInputFormatter.digitsOnly,
-                LengthLimitingTextInputFormatter(16),
-                _CardNumberFormatter(),
-              ],
-              validator: (value) {
-                if (value == null || value.isEmpty) {
-                  return 'Please enter card number';
-                }
-                if (value.replaceAll(' ', '').length < 16) {
-                  return 'Please enter a valid 16-digit card number';
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: paymentState.cardHolderController,
-              decoration: InputDecoration(
-                labelText: 'Card Holder Name',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                prefixIcon: const Icon(Icons.person),
-              ),
-              textCapitalization: TextCapitalization.words,
-              validator: (value) {
-                if (value == null || value.isEmpty) {
-                  return 'Please enter card holder name';
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: TextFormField(
-                    controller: paymentState.expiryController,
-                    decoration: InputDecoration(
-                      labelText: 'Expiry (MM/YY)',
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      prefixIcon: const Icon(Icons.calendar_today),
-                      hintText: 'MM/YY',
-                    ),
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [
-                      FilteringTextInputFormatter.digitsOnly,
-                      LengthLimitingTextInputFormatter(4),
-                      _ExpiryDateFormatter(),
-                    ],
-                    validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return 'Required';
-                      }
-                      if (value.length < 5) {
-                        return 'Invalid format';
-                      }
-
-                      final parts = value.split('/');
-                      if (parts.length != 2) {
-                        return 'Invalid format';
-                      }
-
-                      final month = int.tryParse(parts[0]);
-                      if (month == null || month < 1 || month > 12) {
-                        return 'Invalid month';
-                      }
-
-                      return null;
-                    },
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: TextFormField(
-                    controller: paymentState.cvvController,
-                    decoration: InputDecoration(
-                      labelText: 'CVV',
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      prefixIcon: const Icon(Icons.security),
-                    ),
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [
-                      FilteringTextInputFormatter.digitsOnly,
-                      LengthLimitingTextInputFormatter(3),
-                    ],
-                    obscureText: true,
-                    validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return 'Required';
-                      }
-                      if (value.length < 3) {
-                        return 'Invalid CVV';
-                      }
-                      return null;
-                    },
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            CheckboxListTile(
-              title: const Text('Save card for future payments'),
-              value: paymentState.saveCard,
-              onChanged: (value) {
-                paymentNotifier.setSaveCard(value ?? false);
-              },
-              controlAffinity: ListTileControlAffinity.leading,
-              contentPadding: EdgeInsets.zero,
-            ),
-          ],
-        ),
-      ),
-    );
+  bool _validateLocation(PaymentState paymentState) {
+    return paymentState.useCurrentLocation && paymentState.currentPosition != null ||
+           paymentState.selectedLocation != null;
   }
 
-  Widget _buildPaymentButton(
-    PaymentState paymentState, 
-    PaymentNotifier paymentNotifier, 
-    GlobalKey<FormState> formKey, 
-    Station station, 
-    Battery battery,
-    BatteryBooking booking, 
-    BuildContext context
-  ) {
-    const deliveryFee = 50.0;
-    const taxRate = 0.18;
+  Widget _buildPaymentButton(PaymentState paymentState, PaymentNotifier paymentNotifier, BuildContext context) {
+    if (paymentState.pricingData == null) {
+      return SizedBox(
+        width: double.infinity,
+        height: 50,
+        child: ElevatedButton(
+          onPressed: null,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.grey.shade400,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+          child: const Text(
+            'Loading...',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
+            ),
+          ),
+        ),
+      );
+    }
 
-    final subtotal = booking.totalPrice;
-    final tax = subtotal * taxRate;
-    final total = subtotal + tax + deliveryFee;
+    final pricing = paymentState.pricingData!['pricing'];
+    final total = pricing['total'].toDouble();
+
+    String buttonText = paymentState.selectedPaymentMethod == 'razorpay' 
+        ? 'Pay ₹${total.toStringAsFixed(2)}'
+        : 'Place Order ₹${total.toStringAsFixed(2)}';
 
     return SizedBox(
       width: double.infinity,
       height: 50,
       child: ElevatedButton(
-        onPressed: () async {
-          // First validate the form
-          if (!formKey.currentState!.validate()) {
-            return;
-          }
-          
-          // Then validate location selection
+        onPressed: paymentState.isProcessing ? null : () async {
+          // Validate location selection
           if (!_validateLocation(paymentState)) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
@@ -639,38 +650,119 @@ class PaymentScreen extends ConsumerWidget {
             return;
           }
 
-          // Proceed with payment if all validations pass
-          final orderResult = await paymentNotifier.processPayment(
-            station: station,
-            battery: battery,
-            booking: booking,
-          );
-          
-          if (orderResult != null) {
-            _showSuccessDialog(station, booking, orderResult, context);
+          print('PAYMENT BUTTON: Starting payment process...');
+          print('PAYMENT BUTTON: Payment method: ${paymentState.selectedPaymentMethod}');
+          print('PAYMENT BUTTON: Total amount: ₹${total.toStringAsFixed(2)}');
+
+          try {
+            // Process payment
+            final orderResult = await paymentNotifier.processPayment(
+              station: widget.station,
+              battery: widget.battery,
+              booking: widget.booking,
+            );
+            
+            print('PAYMENT BUTTON: Payment result: $orderResult');
+            
+            if (orderResult != null) {
+              print('PAYMENT BUTTON: Payment successful, showing success dialog');
+              _showSuccessDialog(orderResult, context);
+            } else {
+              print('PAYMENT BUTTON: Payment failed - no result returned');
+              // Check if there's a specific error message
+              final currentState = ref.read(paymentProvider);
+              if (currentState.errorMessage != null) {
+                // Error message is already handled by the error display widget
+                print('PAYMENT BUTTON: Error message: ${currentState.errorMessage}');
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Row(
+                      children: [
+                        const Icon(Icons.error, color: Colors.white),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            paymentState.selectedPaymentMethod == 'razorpay'
+                                ? 'Payment was cancelled or failed. Please try again.'
+                                : 'Order creation failed. Please try again.',
+                          ),
+                        ),
+                      ],
+                    ),
+                    backgroundColor: Colors.red,
+                    duration: const Duration(seconds: 4),
+                    action: SnackBarAction(
+                      label: 'Retry',
+                      textColor: Colors.white,
+                      onPressed: () {
+                        // Clear any error and allow retry
+                        paymentNotifier.clearError();
+                      },
+                    ),
+                  ),
+                );
+              }
+            }
+          } catch (e) {
+            print('PAYMENT BUTTON: Exception during payment: $e');
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Row(
+                  children: [
+                    const Icon(Icons.error, color: Colors.white),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text('Payment error: ${e.toString()}'),
+                    ),
+                  ],
+                ),
+                backgroundColor: Colors.red,
+                duration: const Duration(seconds: 5),
+                action: SnackBarAction(
+                  label: 'Retry',
+                  textColor: Colors.white,
+                  onPressed: () {
+                    paymentNotifier.clearError();
+                  },
+                ),
+              ),
+            );
           }
         },
         style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.green.shade600,
+          backgroundColor: paymentState.isProcessing 
+              ? Colors.grey.shade400 
+              : Colors.green.shade600,
           foregroundColor: Colors.white,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
           ),
+          elevation: paymentState.isProcessing ? 0 : 2,
         ),
-        child: Text(
-          'Pay ₹${total.toStringAsFixed(2)}',
-          style: const TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
+        child: paymentState.isProcessing
+            ? const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                ),
+              )
+            : Text(
+                buttonText,
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
       ),
     );
   }
 
-  void _showSuccessDialog(Station station, BatteryBooking booking, Map<String, dynamic> orderData, BuildContext context) {
+  void _showSuccessDialog(Map<String, dynamic> orderData, BuildContext context) {
     final order = orderData['data'];
-    final orderId = order['orderNumber'] ?? 'Unknown';
+    final orderId = order['orderNumber'] ?? order['id']?.toString() ?? 'Unknown';
     
     showDialog(
       context: context,
@@ -684,7 +776,7 @@ class PaymentScreen extends ConsumerWidget {
               size: 28,
             ),
             const SizedBox(width: 8),
-            const Text('Payment Successful'),
+            const Text('Order Confirmed'),
           ],
         ),
         content: Column(
@@ -696,19 +788,43 @@ class PaymentScreen extends ConsumerWidget {
               style: TextStyle(fontSize: 16),
             ),
             const SizedBox(height: 16),
-            const Text('Booking Details:'),
+            const Text('Order Details:'),
             const SizedBox(height: 8),
             _buildDialogInfoRow('Order ID', orderId),
             const SizedBox(height: 4),
-            _buildDialogInfoRow('Station', station.name),
+            _buildDialogInfoRow('Station', widget.station.name),
             const SizedBox(height: 4),
-            _buildDialogInfoRow('Battery', battery.type),
+            _buildDialogInfoRow('Battery', widget.battery.type),
             const SizedBox(height: 4),
-            _buildDialogInfoRow('Quantity', '${booking.quantity}'),
+            _buildDialogInfoRow('Quantity', '${widget.booking.quantity}'),
             const SizedBox(height: 4),
             _buildDialogInfoRow(
-              'Delivery',
-              'Within ${station.etaMinutes} minutes',
+              'Payment',
+              order['paymentMethod'] == 'razorpay' ? 'Paid Online' : 'Cash on Delivery',
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.green.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.green.shade200),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, color: Colors.green.shade600, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'You will receive updates about your order via notifications.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.green.shade800,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -722,13 +838,14 @@ class PaymentScreen extends ConsumerWidget {
           ElevatedButton(
             onPressed: () {
               Navigator.of(context).pop();
-              _showOrderConfirmation(station, booking, order, context);
+              // You can navigate to order tracking or details here
+              // Navigator.pushNamed(context, '/order-details', arguments: {'orderId': orderId});
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.green.shade600,
               foregroundColor: Colors.white,
             ),
-            child: const Text('Track Order'),
+            child: const Text('View Order'),
           ),
         ],
       ),
@@ -757,275 +874,6 @@ class PaymentScreen extends ConsumerWidget {
           ),
         ),
       ],
-    );
-  }
-
-  void _showOrderConfirmation(Station station, BatteryBooking booking, dynamic order, BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => DraggableScrollableSheet(
-        initialChildSize: 0.7,
-        minChildSize: 0.5,
-        maxChildSize: 0.95,
-        expand: false,
-        builder: (context, scrollController) => SingleChildScrollView(
-          controller: scrollController,
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(
-                  child: Container(
-                    width: 40,
-                    height: 4,
-                    margin: const EdgeInsets.only(bottom: 16),
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade300,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ),
-                const Text(
-                  'Order Confirmation',
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                const Text(
-                  'Thank you for your order!',
-                  style: TextStyle(fontSize: 16),
-                ),
-                const SizedBox(height: 16),
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Delivery Status',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        Row(
-                          children: [
-                            Container(
-                              width: 40,
-                              height: 40,
-                              decoration: BoxDecoration(
-                                color: Colors.green.shade100,
-                                shape: BoxShape.circle,
-                              ),
-                              child: Icon(
-                                Icons.check,
-                                color: Colors.green.shade600,
-                              ),
-                            ),
-                            Expanded(
-                              child: Container(
-                                height: 4,
-                                color: Colors.green.shade600,
-                              ),
-                            ),
-                            Container(
-                              width: 40,
-                              height: 40,
-                              decoration: BoxDecoration(
-                                color: Colors.green.shade100,
-                                shape: BoxShape.circle,
-                              ),
-                              child: Icon(
-                                Icons.delivery_dining,
-                                color: Colors.green.shade600,
-                              ),
-                            ),
-                            Expanded(
-                              child: Container(
-                                height: 4,
-                                color: Colors.grey.shade300,
-                              ),
-                            ),
-                            Container(
-                              width: 40,
-                              height: 40,
-                              decoration: BoxDecoration(
-                                color: Colors.grey.shade200,
-                                shape: BoxShape.circle,
-                              ),
-                              child: Icon(
-                                Icons.home,
-                                color: Colors.grey.shade500,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 16),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Text(
-                              'Confirmed',
-                              style: TextStyle(
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                            const Text(
-                              'On the way',
-                              style: TextStyle(
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                            Text(
-                              'Delivered',
-                              style: TextStyle(
-                                color: Colors.grey.shade500,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 24),
-                        Text(
-                          'Estimated delivery: ${station.etaMinutes} minutes',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w500,
-                            color: Colors.green.shade700,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 24),
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Delivery Address',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          booking.deliveryAddress,
-                          style: const TextStyle(fontSize: 16),
-                        ),
-                        if (booking.deliveryNotes.isNotEmpty) ...[
-                          const SizedBox(height: 8),
-                          Text(
-                            'Notes: ${booking.deliveryNotes}',
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: Colors.grey.shade700,
-                              fontStyle: FontStyle.italic,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 24),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: () {
-                      Navigator.of(context).popUntil((route) => route.isFirst);
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green.shade600,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                    ),
-                    child: const Text(
-                      'Back to Home',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// Custom formatter for card number input - adds space after every 4 digits
-class _CardNumberFormatter extends TextInputFormatter {
-  @override
-  TextEditingValue formatEditUpdate(
-    TextEditingValue oldValue,
-    TextEditingValue newValue,
-  ) {
-    var text = newValue.text;
-
-    if (newValue.selection.baseOffset == 0) {
-      return newValue;
-    }
-
-    var buffer = StringBuffer();
-    for (int i = 0; i < text.length; i++) {
-      buffer.write(text[i]);
-      var nonZeroIndex = i + 1;
-      if (nonZeroIndex % 4 == 0 && nonZeroIndex != text.length) {
-        buffer.write(' ');
-      }
-    }
-
-    var string = buffer.toString();
-    return newValue.copyWith(
-      text: string,
-      selection: TextSelection.collapsed(offset: string.length),
-    );
-  }
-}
-
-// Custom formatter for expiry date input - adds / after 2 digits
-class _ExpiryDateFormatter extends TextInputFormatter {
-  @override
-  TextEditingValue formatEditUpdate(
-    TextEditingValue oldValue,
-    TextEditingValue newValue,
-  ) {
-    var text = newValue.text;
-
-    if (newValue.selection.baseOffset == 0) {
-      return newValue;
-    }
-
-    var buffer = StringBuffer();
-    for (int i = 0; i < text.length; i++) {
-      buffer.write(text[i]);
-      var nonZeroIndex = i + 1;
-      if (nonZeroIndex % 2 == 0 && nonZeroIndex != text.length) {
-        buffer.write('/');
-      }
-    }
-
-    var string = buffer.toString();
-    return newValue.copyWith(
-      text: string,
-      selection: TextSelection.collapsed(offset: string.length),
     );
   }
 }
